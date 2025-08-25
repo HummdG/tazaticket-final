@@ -1,4 +1,19 @@
-def OneWayFlightSearch(departure_date:str, from_city:str, to_city:str, carrier:str, return_date:str):
+def RoundTripFlightSearch(origin: str, destination: str, departure_date: str, return_date: str, number_of_passengers: int = 1, carriers: list = None):
+    """Build a round-trip flight search payload for Travelport API"""
+    
+    # Use default carriers if none provided
+    if carriers is None:
+        carriers = ["TK"]  # Default to Turkish Airlines
+    
+    # Build passenger criteria
+    passenger_criteria = []
+    for i in range(number_of_passengers):
+        passenger_criteria.append({
+            "@type": "PassengerCriteria",
+            "number": i + 1,
+            "age": 25,
+            "passengerTypeCode": "ADT"
+        })
 
     payload = {
         "@type": "CatalogProductOfferingsQueryRequest",
@@ -7,33 +22,26 @@ def OneWayFlightSearch(departure_date:str, from_city:str, to_city:str, carrier:s
             "contentSourceList": [
                 "GDS"
             ],
-            "PassengerCriteria": [
-                {
-                    "@type": "PassengerCriteria",
-                    "number": 1,
-                    "age": 25,
-                    "passengerTypeCode": "ADT"
-                }
-            ],
+            "PassengerCriteria": passenger_criteria,
             "SearchCriteriaFlight": [
                 {
                     "@type": "SearchCriteriaFlight",
                     "departureDate": departure_date,
                     "From": {
-                        "value": from_city
+                        "value": origin
                     },
                     "To": {
-                        "value": to_city
+                        "value": destination
                     }
                 },
                 {
                     "@type": "SearchCriteriaFlight",
                     "departureDate": return_date,
                     "From": {
-                        "value": to_city
+                        "value": destination
                     },
                     "To": {
-                        "value": from_city
+                        "value": origin
                     }
                 }
             ],
@@ -43,9 +51,7 @@ def OneWayFlightSearch(departure_date:str, from_city:str, to_city:str, carrier:s
                     {
                         "@type": "CarrierPreference",
                         "preferenceType": "Preferred",
-                        "carriers": [
-                            "TK"
-                        ]
+                        "carriers": carriers
                     }
                 ]
             },
@@ -56,3 +62,5 @@ def OneWayFlightSearch(departure_date:str, from_city:str, to_city:str, carrier:s
             }
         }
     }
+    
+    return payload
