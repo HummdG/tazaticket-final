@@ -1,41 +1,20 @@
-import os 
-from dotenv import load_dotenv
-import requests
-from datetime import datetime, timedelta
-import json
+"""
+FlightSearchStateMachine tool for managing flight search state and performing searches
+"""
+
 from langchain_core.tools import tool
-from langchain_core.tools import tool as lc_tool
-from langchain.chat_models import init_chat_model
+from datetime import datetime, timedelta
+import re
 
-from typing import Annotated
-
-from typing_extensions import TypedDict
-
-from langgraph.graph import StateGraph, START, END
-from langgraph.graph.message import add_messages
-
-from langgraph.checkpoint.memory import InMemorySaver
-
-from fastapi import FastAPI, Form
-from fastapi.responses import Response
-import html
-
-# Import our modules
-from app.statemachine.ConversationFlowSM import ConversationFlowSM
-from app.payloads.OneWayFlightSearch import OneWayFlightSearch
-from app.payloads.RoundTripFlightSearch import RoundTripFlightSearch
-from app.tools.TravelportSearch import TravelportSearch
-
-load_dotenv()
-
-# Import airline codes and carrier functions
-from app.airline_codes import (
-    AIRLINE_CODES, 
+# Import required modules
+from ..statemachine.ConversationFlowSM import ConversationFlowSM
+from ..payloads.OneWayFlightSearch import OneWayFlightSearch
+from ..payloads.RoundTripFlightSearch import RoundTripFlightSearch
+from .TravelportSearch import TravelportSearch
+from ..airline_codes import (
     DEFAULT_PREFERRED_CARRIERS, 
     get_airline_name, 
-    parse_carrier_preference,
-    get_all_carrier_codes,
-    get_carriers_by_region
+    parse_carrier_preference
 )
 
 # State machine storage per thread
@@ -46,6 +25,58 @@ def get_or_create_state_machine(thread_id: str) -> ConversationFlowSM:
     if thread_id not in state_machines:
         state_machines[thread_id] = ConversationFlowSM()
     return state_machines[thread_id]
+
+def format_duration(minutes: int) -> str:
+    """Format duration in minutes to Xh Ym"""
+    if not minutes:
+        return "Unknown"
+    hours = minutes // 60
+    mins = minutes % 60
+    if hours and mins:
+        return f"{hours}h {mins}m"
+    elif hours:
+        return f"{hours}h"
+    else:
+        return f"{mins}m"
+
+def format_stops(stops: int) -> str:
+    """Format stops count"""
+    if stops == 0:
+        return "non-stop"
+    elif stops == 1:
+        return "1 stop"
+    else:
+        return f"{stops} stops"
+
+def format_baggage_summary(baggage: dict) -> str:
+    """Format baggage information"""
+    parts = []
+    
+    # Carry-on
+    carry_on = "✓" if baggage.get("carry_on_included") else "✗"
+    carry_text = baggage.get("carry_on_text", "")
+    if carry_text:
+        parts.append(f"carry-on {carry_on} ({carry_text})")
+    else:
+        parts.append(f"carry-on {carry_on}")
+    
+    # Checked bag
+    checked = "✓" if baggage.get("checked_bag_included") else "✗"
+    parts.append(f"checked {checked}")
+    
+    # Validating airline
+    if baggage.get("validating_airline"):
+        airline_code = baggage['validating_airline']
+        airline_name = get_airline_name(airline_code)
+        parts.append(f"Validating airline: {airline_name}")
+    
+    # Penalties
+    if baggage.get("penalties_change"):
+        parts.append(f"Change: {baggage['penalties_change']}")
+    if baggage.get("penalties_cancel"):
+        parts.append(f"Cancel: {baggage['penalties_cancel']}")
+    
+    return " | ".join(parts)
 
 @tool("FlightSearchStateMachine")
 def FlightSearchStateMachine(origin: str = None, destination: str = None, departure_date: str = None, 
@@ -67,8 +98,6 @@ def FlightSearchStateMachine(origin: str = None, destination: str = None, depart
     - If user mentions specific airline (e.g., "Emirates", "Qatar", "EK"), use that carrier
     - Otherwise, use comprehensive default carrier list for broader search results
     """
-    import re
-    from datetime import datetime, timedelta
     
     def fix_date_year(date_str):
         """Ensure date is in the future - if in past, move to next year"""
@@ -207,195 +236,4 @@ def FlightSearchStateMachine(origin: str = None, destination: str = None, depart
             return f"Sorry, there was an error searching for flights: {str(e)}"
     else:
         missing = sm.get_missing_variables()
-        return f"Flight search in progress. Still need: {', '.join(missing)}. Please provide these details to continue."
-
-def format_duration(minutes: int) -> str:
-    """Format duration in minutes to Xh Ym"""
-    if not minutes:
-        return "Unknown"
-    hours = minutes // 60
-    mins = minutes % 60
-    if hours and mins:
-        return f"{hours}h {mins}m"
-    elif hours:
-        return f"{hours}h"
-    else:
-        return f"{mins}m"
-
-def format_stops(stops: int) -> str:
-    """Format stops count"""
-    if stops == 0:
-        return "non-stop"
-    elif stops == 1:
-        return "1 stop"
-    else:
-        return f"{stops} stops"
-
-def format_baggage_summary(baggage: dict) -> str:
-    """Format baggage information"""
-    parts = []
-    
-    # Carry-on
-    carry_on = "✓" if baggage.get("carry_on_included") else "✗"
-    carry_text = baggage.get("carry_on_text", "")
-    if carry_text:
-        parts.append(f"carry-on {carry_on} ({carry_text})")
-    else:
-        parts.append(f"carry-on {carry_on}")
-    
-    # Checked bag
-    checked = "✓" if baggage.get("checked_bag_included") else "✗"
-    parts.append(f"checked {checked}")
-    
-    # Validating airline
-    if baggage.get("validating_airline"):
-        parts.append(f"Validating airline: {baggage['validating_airline']}")
-    
-    # Penalties
-    if baggage.get("penalties_change"):
-        parts.append(f"Change: {baggage['penalties_change']}")
-    if baggage.get("penalties_cancel"):
-        parts.append(f"Cancel: {baggage['penalties_cancel']}")
-    
-    return " | ".join(parts)
-
-
-
-# Making the tools callable - only expose FlightSearchStateMachine to LLM
-tools = [FlightSearchStateMachine]
-
-# Using AI model
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") 
-llm = init_chat_model("gpt-4o-mini", model_provider="openai", temperature=0)
-
-# Creating state graph
-class State(TypedDict):
-    messages: Annotated[list[dict], add_messages]
-
-graph_b = StateGraph(State)
-llm_with_tools = llm.bind_tools(tools)
-
-# Adding first node
-def chatbot(state: State):
-    return {"messages": [llm_with_tools.invoke(state["messages"])]}
-
-graph_b.add_node("chatbot", chatbot)
-
-# Creating tool node
-from langchain_core.messages import ToolMessage
-
-class BasicToolNode:
-    """Node that runs the tools requested in the last AI message."""
-
-    def __init__(self, tools: list) -> None:
-        self.tools_by_name = {tool.name: tool for tool in tools}
-
-    def __call__(self, inputs: dict):
-        if messages := inputs.get("messages", []):
-            message = messages[-1]
-        else:
-            raise ValueError("No messages in inputs")
-        
-        outputs = []
-        for tool_call in message.tool_calls:
-            # Pass thread_id and user_input_text to FlightSearchStateMachine if needed
-            tool_args = tool_call["args"]
-            if tool_call["name"] == "FlightSearchStateMachine":
-                if "thread_id" not in tool_args:
-                    # Extract thread_id from the graph state if available
-                    tool_args["thread_id"] = inputs.get("configurable", {}).get("thread_id", "default")
-                if "user_input_text" not in tool_args or not tool_args["user_input_text"]:
-                    # Find the original user message for carrier parsing
-                    user_messages = [msg for msg in inputs.get("messages", []) if hasattr(msg, "type") and msg.type == "human"]
-                    if user_messages:
-                        tool_args["user_input_text"] = user_messages[-1].content
-            
-            tool_result = self.tools_by_name[tool_call["name"]].invoke(tool_args)
-            outputs.append(
-                ToolMessage(
-                    content=str(tool_result),
-                    name=tool_call["name"],
-                    tool_call_id=tool_call["id"],
-                )
-            )
-        return {"messages": outputs}
-
-tool_node = BasicToolNode(tools=tools)
-graph_b.add_node("tools", tool_node)
-
-# Routing function
-def route_tools(state: State):
-    """
-    Use in the conditional_edge to route to the ToolNode if the last message
-    has tool calls. Otherwise, route to the end.
-    """
-    if isinstance(state, list):
-        ai_message = state[-1]
-    elif messages := state.get("messages", []):
-        ai_message = messages[-1]
-    else:
-        raise ValueError("No messages in state", {state})
-    if hasattr(ai_message, "tool_calls") and len(ai_message.tool_calls) > 0:
-        return "tools"
-    
-    return END
-
-# Compiling the graph
-graph_b.add_conditional_edges(
-    "chatbot",
-    route_tools,
-    {"tools": "tools", END: END},
-)
-# Any time a tool is called, we return to the chatbot to decide the next step
-graph_b.add_edge("tools", "chatbot")
-graph_b.add_edge(START, "chatbot")
-graph = graph_b.compile()
-
-# Adding memory checkpoint
-memory = InMemorySaver()
-graph = graph_b.compile(checkpointer=memory)
-
-app = FastAPI()
-
-def _extract_last_ai_text(state: dict) -> str:
-    messages = state.get("messages", []) if isinstance(state, dict) else []
-    if not messages:
-        return ""
-    last = messages[-1]
-    content = getattr(last, "content", None)
-    if content is None:
-        return str(last)
-    if isinstance(content, list):
-        parts = []
-        for part in content:
-            if isinstance(part, dict) and "text" in part:
-                parts.append(part.get("text") or "")
-            else:
-                parts.append(str(part))
-        return "\n".join([p for p in parts if p])
-    return content if isinstance(content, str) else str(content)
-
-@app.get("/")
-async def healthcheck():
-    return {"status": "ok"}
-
-@app.post("/webhook")
-async def twilio_whatsapp(Body: str = Form(...), From: str | None = Form(default=None), WaId: str | None = Form(default=None)):
-    thread_id = WaId or From or "whatsapp-default"
-    try:
-        from langchain_core.messages import HumanMessage
-        state = graph.invoke(
-            {"messages": [HumanMessage(content=Body)]},
-            {"configurable": {"thread_id": thread_id}},
-        )
-        reply_text = _extract_last_ai_text(state) or "Got it."
-    except Exception as e:
-        reply_text = f"Error: {e}"
-    # Return TwiML so Twilio replies to the user
-    twiml = f"<?xml version=\"1.0\" encoding=\"UTF-8\"?><Response><Message>{html.escape(reply_text)}</Message></Response>"
-    return Response(content=twiml, media_type="application/xml")
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("actual_app:app", host="0.0.0.0", port=int(os.getenv("PORT", "8000")), reload=False)
-
+        return f"Flight search in progress. Still need: {', '.join(missing)}. Please provide these details to continue." 
