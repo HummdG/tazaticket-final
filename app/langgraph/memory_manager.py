@@ -30,6 +30,9 @@ class MemoryManager:
         self.threads: Dict[str, ThreadState] = {}
         self._global_lock = threading.Lock()
         
+        print(f"[MemoryManager] Initialized with table: {CHAT_HISTORY_TABLE}, region: {AWS_REGION}")
+        print(f"[MemoryManager] Config - Context pairs: {CONTEXT_PAIRS}, Batch pairs: {BATCH_PAIRS}, Max RAM pairs: {MAX_RAM_PAIRS}")
+        
         # Register shutdown hook to flush all conversations
         import atexit
         atexit.register(self._shutdown_hook)
@@ -38,6 +41,7 @@ class MemoryManager:
         """Get or create thread state"""
         with self._global_lock:
             if thread_id not in self.threads:
+                print(f"[MemoryManager] Creating new thread state for {thread_id}")
                 self.threads[thread_id] = ThreadState(
                     thread_id=thread_id,
                     session_id=str(uuid.uuid4()),
@@ -52,27 +56,34 @@ class MemoryManager:
     def _is_session_idle(self, thread_state: ThreadState) -> bool:
         """Check if session has been idle for too long"""
         idle_time = time.time() - thread_state.last_activity_at
-        return idle_time > SESSION_IDLE_SECONDS
+        is_idle = idle_time > SESSION_IDLE_SECONDS
+        if is_idle:
+            print(f"[MemoryManager] Session {thread_state.thread_id} is idle ({idle_time:.0f}s > {SESSION_IDLE_SECONDS}s)")
+        return is_idle
     
     def _evict_oldest_pair_to_batch(self, thread_state: ThreadState) -> None:
         """Move oldest pair from context to batch buffer"""
         if thread_state.context_pairs:
             oldest_pair = thread_state.context_pairs.pop(0)
             thread_state.batch_pairs.append(oldest_pair)
+            print(f"[MemoryManager] Evicted oldest pair (turn {oldest_pair.turn}) to batch for thread {thread_state.thread_id}")
     
     def _check_and_flush_batch(self, thread_state: ThreadState) -> None:
         """Flush batch buffer if it reaches the limit"""
         if len(thread_state.batch_pairs) >= BATCH_PAIRS:
+            print(f"[MemoryManager] Batch limit reached ({len(thread_state.batch_pairs)} pairs), flushing for thread {thread_state.thread_id}")
             batch_write_pairs_to_dynamodb(
                 self.dynamodb, thread_state.thread_id, 
                 thread_state.batch_pairs, thread_state.session_id
             )
             thread_state.batch_pairs.clear()
+            print(f"[MemoryManager] Batch cleared for thread {thread_state.thread_id}")
     
     def _enforce_ram_limit(self, thread_state: ThreadState) -> None:
         """Ensure total RAM pairs don't exceed limit"""
         total_pairs = len(thread_state.context_pairs) + len(thread_state.batch_pairs)
         if total_pairs > MAX_RAM_PAIRS:
+            print(f"[MemoryManager] RAM limit exceeded ({total_pairs} > {MAX_RAM_PAIRS}), flushing batch early for thread {thread_state.thread_id}")
             # Flush batch early to stay within limit
             batch_write_pairs_to_dynamodb(
                 self.dynamodb, thread_state.thread_id, 
@@ -82,11 +93,13 @@ class MemoryManager:
     
     def on_session_start(self, thread_id: str) -> None:
         """Initialize session, handle idle timeout, and load context"""
+        print(f"[MemoryManager] Starting session for thread {thread_id}")
         thread_state = self._get_thread_state(thread_id)
         
         with thread_state.lock:
             # Check if session has been idle
             if self._is_session_idle(thread_state):
+                print(f"[MemoryManager] Session idle, starting fresh for thread {thread_id}")
                 # Flush all remaining pairs and start new session
                 self.flush_all(thread_id)
                 thread_state.session_id = str(uuid.uuid4())
@@ -96,6 +109,7 @@ class MemoryManager:
             
             # Load conversation state from DynamoDB into context
             if not thread_state.context_pairs:
+                print(f"[MemoryManager] Loading conversation state from DynamoDB for thread {thread_id}")
                 pairs = load_conversation_state_from_dynamodb(self.dynamodb, thread_id)
                 thread_state.context_pairs = pairs
                 
@@ -104,11 +118,16 @@ class MemoryManager:
                     max_turn = max(p.turn for p in pairs)
                     thread_state.next_seq = len(pairs) * 2 + 1  # Rough estimate
                     thread_state.next_turn = max_turn + 1
+                    print(f"[MemoryManager] Updated counters: next_seq={thread_state.next_seq}, next_turn={thread_state.next_turn}")
+                else:
+                    print(f"[MemoryManager] No existing conversation found for thread {thread_id}")
             
             self._mark_activity(thread_state)
+            print(f"[MemoryManager] Session started for thread {thread_id} with {len(thread_state.context_pairs)} pairs in context")
     
     def on_session_end(self, thread_id: str) -> None:
         """End session and flush all remaining pairs"""
+        print(f"[MemoryManager] Ending session for thread {thread_id}")
         self.flush_all(thread_id)
     
     def add_user_message(self, thread_id: str, content: str) -> None:
@@ -135,6 +154,7 @@ class MemoryManager:
             
             # Create new open pair
             thread_state.open_pair = Pair(turn=turn, user_message=user_message)
+            print(f"[MemoryManager] Added user message for thread {thread_id}, turn {turn}, seq {seq}")
     
     def add_assistant_message(self, thread_id: str, content: str) -> None:
         """Add assistant message and close the current pair"""
@@ -169,6 +189,8 @@ class MemoryManager:
             
             # Add to context
             thread_state.context_pairs.append(completed_pair)
+            print(f"[MemoryManager] Completed pair for thread {thread_id}, turn {completed_pair.turn}")
+            print(f"[MemoryManager] Context now has {len(thread_state.context_pairs)} pairs")
             
             # Evict oldest pair if context exceeds limit
             if len(thread_state.context_pairs) > CONTEXT_PAIRS:
@@ -198,6 +220,7 @@ class MemoryManager:
                     "content": thread_state.open_pair.user_message.content
                 })
             
+            print(f"[MemoryManager] Generated {len(messages)} messages for LLM context (thread {thread_id})")
             return messages
     
     def flush_batch(self, thread_id: str) -> None:
@@ -206,11 +229,14 @@ class MemoryManager:
         
         with thread_state.lock:
             if thread_state.batch_pairs:
+                print(f"[MemoryManager] Manually flushing {len(thread_state.batch_pairs)} pairs from batch for thread {thread_id}")
                 batch_write_pairs_to_dynamodb(
                     self.dynamodb, thread_id, 
                     thread_state.batch_pairs, thread_state.session_id
                 )
                 thread_state.batch_pairs.clear()
+            else:
+                print(f"[MemoryManager] No pairs in batch to flush for thread {thread_id}")
     
     def flush_all(self, thread_id: str) -> None:
         """Flush all pairs (context + batch) to DynamoDB"""
@@ -227,14 +253,20 @@ class MemoryManager:
             
             # Flush to DynamoDB
             if all_pairs:
+                print(f"[MemoryManager] Flushing all {len(all_pairs)} pairs for thread {thread_id}")
                 batch_write_pairs_to_dynamodb(
                     self.dynamodb, thread_id, all_pairs, thread_state.session_id
                 )
+            else:
+                print(f"[MemoryManager] No pairs to flush for thread {thread_id}")
             
             # Clear all RAM state
+            context_count = len(thread_state.context_pairs)
+            batch_count = len(thread_state.batch_pairs)
             thread_state.context_pairs.clear()
             thread_state.batch_pairs.clear()
             thread_state.open_pair = None
+            print(f"[MemoryManager] Cleared RAM state: {context_count} context + {batch_count} batch pairs for thread {thread_id}")
     
     def prime_inmemorysaver(self, thread_id: str, graph) -> None:
         """
@@ -248,6 +280,7 @@ class MemoryManager:
         
         with thread_state.lock:
             if not thread_state.context_pairs:
+                print(f"[MemoryManager] No context pairs to prime InMemorySaver for thread {thread_id}")
                 return
             
             try:
@@ -259,10 +292,10 @@ class MemoryManager:
                 # Just store the messages - the graph will handle checkpointing automatically
                 # when the next real interaction happens
                 if langchain_messages:
-                    pass
+                    print(f"[MemoryManager] Priming InMemorySaver with {len(langchain_messages)} messages for thread {thread_id}")
                 
             except Exception as e:
-                print(f"Warning: Could not prime InMemorySaver: {e}")
+                print(f"[MemoryManager] Warning: Could not prime InMemorySaver for thread {thread_id}: {e}")
     
     def _shutdown_hook(self):
         """Save conversations to DynamoDB on shutdown"""
@@ -274,19 +307,26 @@ class MemoryManager:
             with self._global_lock:
                 thread_ids = list(self.threads.keys())
 
+            print(f"[MemoryManager] Shutdown: Flushing {len(thread_ids)} active threads")
+
             # Flush each thread WITHOUT holding the global lock
             for i, thread_id in enumerate(thread_ids, 1):
                 elapsed = time.time() - start_time
                 if elapsed > timeout_seconds:
+                    print(f"[MemoryManager] Shutdown timeout reached after {elapsed:.1f}s, stopping flush")
                     break
                 try:
                     self.flush_all(thread_id)
+                    if i % 10 == 0:  # Log progress every 10 threads
+                        print(f"[MemoryManager] Shutdown: Flushed {i}/{len(thread_ids)} threads")
                 except Exception as e:
-                    print(f"Error saving thread {thread_id}: {e}")
+                    print(f"[MemoryManager] Error saving thread {thread_id} during shutdown: {e}")
+
+            print(f"[MemoryManager] Shutdown complete in {time.time() - start_time:.1f}s")
 
         except Exception as e:
-            print(f"Critical error during shutdown: {e}")
+            print(f"[MemoryManager] Critical error during shutdown: {e}")
 
 
 # Global instance
-memory_manager = MemoryManager() 
+memory_manager = MemoryManager()

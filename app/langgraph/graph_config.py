@@ -129,6 +129,8 @@ def create_graph():
     memory = InMemorySaver()
     graph = graph_builder.compile(checkpointer=memory)
     
+    print("[GraphConfig] LangGraph created with InMemorySaver checkpointer")
+    
     return graph
 
 
@@ -137,6 +139,8 @@ def invoke_graph(graph, user_message: str, thread_id: str = "default"):
     Convenience function to invoke the graph with a user message.
     Integrates with MemoryManager for persistent chat history.
     """
+    print(f"[GraphConfig] Invoking graph for thread {thread_id} with message: '{user_message[:50]}...'")
+    
     # Initialize session and load context from DynamoDB
     memory_manager.on_session_start(thread_id)
     
@@ -145,6 +149,7 @@ def invoke_graph(graph, user_message: str, thread_id: str = "default"):
     
     # Get context for LLM (flattened pairs)
     context_messages = memory_manager.get_context_for_llm(thread_id)
+    print(f"[GraphConfig] Using {len(context_messages)} context messages for LLM")
     
     # Convert context to LangChain messages for the graph
     langchain_messages = []
@@ -153,6 +158,8 @@ def invoke_graph(graph, user_message: str, thread_id: str = "default"):
             langchain_messages.append(HumanMessage(content=msg["content"]))
         else:  # assistant
             langchain_messages.append(AIMessage(content=msg["content"]))
+    
+    print(f"[GraphConfig] Converted to {len(langchain_messages)} LangChain messages")
     
     # Invoke the graph with the full context
     state = graph.invoke(
@@ -163,7 +170,10 @@ def invoke_graph(graph, user_message: str, thread_id: str = "default"):
     # Extract assistant response and add to memory manager (closes pair)
     assistant_text = extract_last_ai_text(state)
     if assistant_text:
+        print(f"[GraphConfig] Adding assistant response to memory: '{assistant_text[:50]}...'")
         memory_manager.add_assistant_message(thread_id, assistant_text)
+    else:
+        print("[GraphConfig] Warning: No assistant response extracted from state")
     
     return state
 
@@ -187,4 +197,4 @@ def extract_last_ai_text(state: dict) -> str:
             else:
                 parts.append(str(part))
         return "\n".join([p for p in parts if p])
-    return content if isinstance(content, str) else str(content) 
+    return content if isinstance(content, str) else str(content)

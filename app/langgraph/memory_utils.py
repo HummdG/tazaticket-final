@@ -94,8 +94,11 @@ def get_next_seq_from_dynamodb(dynamodb_client, thread_id: str) -> int:
             ExpressionAttributeValues={':one': {'N': '1'}},
             ReturnValues='UPDATED_NEW'
         )
-        return int(response['Attributes']['next_seq']['N'])
-    except ClientError:
+        next_seq = int(response['Attributes']['next_seq']['N'])
+        print(f"[MemoryManager] Got next sequence {next_seq} for thread {thread_id}")
+        return next_seq
+    except ClientError as e:
+        print(f"[MemoryManager] Creating new counter row for thread {thread_id}")
         # If meta row doesn't exist, initialize it
         try:
             dynamodb_client.put_item(
@@ -111,6 +114,7 @@ def get_next_seq_from_dynamodb(dynamodb_client, thread_id: str) -> int:
                 },
                 ConditionExpression='attribute_not_exists(thread_id)'
             )
+            print(f"[MemoryManager] Created new counter row for thread {thread_id}")
             return 1
         except ClientError:
             # Race condition - try again
@@ -130,7 +134,9 @@ def get_next_turn_from_dynamodb(dynamodb_client, thread_id: str) -> int:
             ExpressionAttributeValues={':one': {'N': '1'}},
             ReturnValues='UPDATED_NEW'
         )
-        return int(response['Attributes']['next_turn']['N'])
+        next_turn = int(response['Attributes']['next_turn']['N'])
+        print(f"[MemoryManager] Got next turn {next_turn} for thread {thread_id}")
+        return next_turn
     except ClientError:
         # Meta row should exist from get_next_seq
         return get_next_turn_from_dynamodb(dynamodb_client, thread_id)
@@ -139,6 +145,7 @@ def get_next_turn_from_dynamodb(dynamodb_client, thread_id: str) -> int:
 def read_pairs_from_dynamodb(dynamodb_client, thread_id: str, n: int) -> List[Pair]:
     """Read last n complete pairs from DynamoDB"""
     try:
+        print(f"[MemoryManager] Reading last {n} pairs from DynamoDB for thread {thread_id}")
         # Query in reverse order to get most recent messages
         response = dynamodb_client.query(
             TableName=CHAT_HISTORY_TABLE,
@@ -150,6 +157,8 @@ def read_pairs_from_dynamodb(dynamodb_client, thread_id: str, n: int) -> List[Pa
             ScanIndexForward=False,  # Reverse order (newest first)
             Limit=n * 2 + 10  # Get enough messages to form n pairs
         )
+        
+        print(f"[MemoryManager] Retrieved {len(response['Items'])} items from DynamoDB")
         
         # Group messages by turn to form pairs
         messages_by_turn: Dict[int, Dict[str, Message]] = {}
@@ -188,10 +197,12 @@ def read_pairs_from_dynamodb(dynamodb_client, thread_id: str, n: int) -> List[Pa
                     pairs.append(pair)
         
         # Return last n complete pairs in chronological order
-        return list(reversed(pairs[:n]))
+        final_pairs = list(reversed(pairs[:n]))
+        print(f"[MemoryManager] Loaded {len(final_pairs)} complete pairs for thread {thread_id}")
+        return final_pairs
         
     except ClientError as e:
-        print(f"Error reading pairs from DynamoDB: {e}")
+        print(f"[MemoryManager] Error reading pairs from DynamoDB for thread {thread_id}: {e}")
         return []
 
 
@@ -199,6 +210,8 @@ def batch_write_pairs_to_dynamodb(dynamodb_client, thread_id: str, pairs: List[P
     """Write pairs to DynamoDB in batch"""
     if not pairs:
         return
+    
+    print(f"[MemoryManager] Writing {len(pairs)} pairs to DynamoDB for thread {thread_id}")
     
     # Prepare batch write items
     items = []
@@ -234,6 +247,8 @@ def batch_write_pairs_to_dynamodb(dynamodb_client, thread_id: str, pairs: List[P
             
             items.append({'PutRequest': {'Item': assistant_item}})
     
+    print(f"[MemoryManager] Prepared {len(items)} items for batch write")
+    
     # Batch write with retry for unprocessed items
     unprocessed_items = items
     retry_count = 0
@@ -247,15 +262,17 @@ def batch_write_pairs_to_dynamodb(dynamodb_client, thread_id: str, pairs: List[P
             unprocessed_items = response.get('UnprocessedItems', {}).get(CHAT_HISTORY_TABLE, [])
             
             if unprocessed_items:
+                print(f"[MemoryManager] {len(unprocessed_items)} unprocessed items, retrying (attempt {retry_count + 1})")
                 retry_count += 1
                 if retry_count < max_retries:
                     sleep_time = min(2 ** retry_count, 8)  # Cap at 8 seconds
                     time.sleep(sleep_time)
             else:
+                print(f"[MemoryManager] Successfully wrote all {len(items)} items to DynamoDB")
                 return  # Exit successfully
                 
         except ClientError as e:
-            print(f"Error batch writing to DynamoDB: {e}")
+            print(f"[MemoryManager] Error batch writing to DynamoDB (attempt {retry_count + 1}): {e}")
             retry_count += 1
             if retry_count < max_retries:
                 sleep_time = min(2 ** retry_count, 8)  # Cap at 8 seconds
@@ -265,12 +282,13 @@ def batch_write_pairs_to_dynamodb(dynamodb_client, thread_id: str, pairs: List[P
     
     # If we exit the loop due to unprocessed items, warn but don't crash
     if unprocessed_items:
-        print(f"Warning: {len(unprocessed_items)} items could not be written after {max_retries} retries")
+        print(f"[MemoryManager] WARNING: {len(unprocessed_items)} items could not be written after {max_retries} retries")
 
 
 def load_conversation_state_from_dynamodb(dynamodb_client, thread_id: str) -> List[Pair]:
     """Load conversation state from DynamoDB (try new format first, fall back to old format)"""
     try:
+        print(f"[MemoryManager] Loading conversation state for thread {thread_id}")
         # First, try to get the new conversation state item
         response = dynamodb_client.get_item(
             TableName=CHAT_HISTORY_TABLE,
@@ -281,6 +299,7 @@ def load_conversation_state_from_dynamodb(dynamodb_client, thread_id: str) -> Li
         )
         
         if 'Item' in response:
+            print(f"[MemoryManager] Found conversation state item for thread {thread_id}")
             item = response['Item']
             
             # Parse the messages JSON
@@ -320,16 +339,18 @@ def load_conversation_state_from_dynamodb(dynamodb_client, thread_id: str) -> Li
             if current_pair:
                 pairs.append(current_pair)
             
+            print(f"[MemoryManager] Loaded {len(pairs)} pairs from conversation state")
             return pairs
         
         else:
+            print(f"[MemoryManager] No conversation state found, falling back to reading individual messages")
             # Fall back to old format - query individual messages
             return read_pairs_from_dynamodb(dynamodb_client, thread_id, CONTEXT_PAIRS)
         
     except Exception as e:
-        print(f"Error loading conversation state: {e}")
+        print(f"[MemoryManager] Error loading conversation state for thread {thread_id}: {e}")
         # Fall back to old format on any error
         try:
             return read_pairs_from_dynamodb(dynamodb_client, thread_id, CONTEXT_PAIRS)
         except:
-            return [] 
+            return []
