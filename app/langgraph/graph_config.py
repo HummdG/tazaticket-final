@@ -11,9 +11,10 @@ from langchain.chat_models import init_chat_model
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 from langgraph.checkpoint.memory import InMemorySaver
-from langchain_core.messages import ToolMessage, HumanMessage
+from langchain_core.messages import ToolMessage, HumanMessage, AIMessage
 
 from ..tools.FlightSearchStateMachine import FlightSearchStateMachine
+from .memory_manager import memory_manager
 
 
 class State(TypedDict):
@@ -124,7 +125,7 @@ def create_graph():
     graph_builder.add_edge("tools", "chatbot")
     graph_builder.add_edge(START, "chatbot")
     
-    # Add memory checkpoint
+    # Add memory checkpoint (InMemorySaver for LangGraph checkpointing)
     memory = InMemorySaver()
     graph = graph_builder.compile(checkpointer=memory)
     
@@ -133,12 +134,37 @@ def create_graph():
 
 def invoke_graph(graph, user_message: str, thread_id: str = "default"):
     """
-    Convenience function to invoke the graph with a user message
+    Convenience function to invoke the graph with a user message.
+    Integrates with MemoryManager for persistent chat history.
     """
+    # Initialize session and load context from DynamoDB
+    memory_manager.on_session_start(thread_id)
+    
+    # Add user message to memory manager (starts new pair)
+    memory_manager.add_user_message(thread_id, user_message)
+    
+    # Get context for LLM (flattened pairs)
+    context_messages = memory_manager.get_context_for_llm(thread_id)
+    
+    # Convert context to LangChain messages for the graph
+    langchain_messages = []
+    for msg in context_messages:
+        if msg["role"] == "user":
+            langchain_messages.append(HumanMessage(content=msg["content"]))
+        else:  # assistant
+            langchain_messages.append(AIMessage(content=msg["content"]))
+    
+    # Invoke the graph with the full context
     state = graph.invoke(
-        {"messages": [HumanMessage(content=user_message)]},
+        {"messages": langchain_messages},
         {"configurable": {"thread_id": thread_id}},
     )
+    
+    # Extract assistant response and add to memory manager (closes pair)
+    assistant_text = extract_last_ai_text(state)
+    if assistant_text:
+        memory_manager.add_assistant_message(thread_id, assistant_text)
+    
     return state
 
 
