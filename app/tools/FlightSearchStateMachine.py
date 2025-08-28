@@ -5,13 +5,14 @@ FlightSearchStateMachine tool for managing flight search state and performing se
 from langchain_core.tools import tool
 from datetime import datetime, timedelta
 import re
+from typing import Optional
 
 # Import required modules
 from ..statemachine.ConversationFlowSM import ConversationFlowSM
 from ..payloads.OneWayFlightSearch import OneWayFlightSearch
 from ..payloads.RoundTripFlightSearch import RoundTripFlightSearch
 from .TravelportSearch import TravelportSearch
-from ..airline_codes import (
+from .airline_codes import (
     DEFAULT_PREFERRED_CARRIERS, 
     get_airline_name, 
     parse_carrier_preference
@@ -78,10 +79,25 @@ def format_baggage_summary(baggage: dict) -> str:
     
     return " | ".join(parts)
 
+def format_layovers(itinerary: dict) -> str:
+        lays = (itinerary or {}).get("layovers") or []
+        if not lays:
+            return ""
+        parts = [f"{l.get('airport_code') or l.get('city')} ({l.get('duration')})" for l in lays]
+        return "   Layover: " + ", ".join(parts) + "\n"
+
+
 @tool("FlightSearchStateMachine")
-def FlightSearchStateMachine(origin: str = None, destination: str = None, departure_date: str = None, 
-                           return_date: str = None, number_of_passengers: int = 1, 
-                           type_of_trip: str = None, user_input_text: str = "", thread_id: str = "default"):
+def FlightSearchStateMachine(
+    origin: Optional[str] = None,
+    destination: Optional[str] = None,
+    departure_date: Optional[str] = None,
+    return_date: Optional[str] = None,          
+    number_of_passengers: int = 1,
+    type_of_trip: Optional[str] = None,
+    user_input_text: Optional[str] = "",
+    thread_id: str = "default",
+):
     """
     Manages flight search state and performs search when all required fields are complete.
     Call this tool when user mentions flight/travel plans to update search parameters.
@@ -190,13 +206,20 @@ def FlightSearchStateMachine(origin: str = None, destination: str = None, depart
                         inbound = summary.get("inbound", {})
                         
                         response = f"✈️ Round-trip flight found: {price['total']} {price['currency']}\n\n"
-                        
+                        return {
+                            "text": response,           # unchanged human text for the LLM
+                            "summary": summary,         # structured data your formatter needs
+                            "trip_type": sm.type_of_trip
+                        }
                         if outbound:
                             duration = format_duration(outbound.get("duration_minutes_total"))
                             stops = format_stops(outbound.get("stops_total", 0))
                             response += f"🛫 Outbound: {duration}, {stops}\n"
                             if outbound.get("baggage"):
                                 response += f"   Baggage: {format_baggage_summary(outbound['baggage'])}\n"
+                            lf = format_layovers(outbound.get("itinerary"))
+                            if lf:
+                                response += lf
                         
                         if inbound:
                             duration = format_duration(inbound.get("duration_minutes_total"))
@@ -204,7 +227,9 @@ def FlightSearchStateMachine(origin: str = None, destination: str = None, depart
                             response += f"🛬 Return: {duration}, {stops}\n"
                             if inbound.get("baggage"):
                                 response += f"   Baggage: {format_baggage_summary(inbound['baggage'])}\n"
-                        
+                            lf = format_layovers(inbound.get("itinerary"))
+                            if lf:
+                                response += lf
                         # Reset state machine after successful search
                         state_machines[thread_id] = ConversationFlowSM()
                         return response
@@ -217,6 +242,15 @@ def FlightSearchStateMachine(origin: str = None, destination: str = None, depart
                         
                         response = f"✈️ One-way flight found: {price_text}\n"
                         response += f"🛫 Flight: {duration}, {stops}\n"
+                        it = (summary.get("itinerary") or {})
+                        
+                        if it.get("airlines"):
+                            response += f"Airline: {it['airlines']}\n"
+                        if it.get("flight_numbers"):
+                            response += f"Flight no.: {it['flight_numbers']}\n"
+                        lf = format_layovers(it)
+                        if lf:
+                            response += lf
                         
                         if summary.get("baggage"):
                             response += f"Baggage: {format_baggage_summary(summary['baggage'])}\n"

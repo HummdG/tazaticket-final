@@ -15,7 +15,7 @@ from .memory_utils import (
     Message, Pair, ThreadState,
     CHAT_HISTORY_TABLE, AWS_REGION, SESSION_IDLE_SECONDS, CONTEXT_PAIRS, BATCH_PAIRS, MAX_RAM_PAIRS,
     get_now_iso, get_next_seq_from_dynamodb, get_next_turn_from_dynamodb,
-    read_pairs_from_dynamodb, batch_write_pairs_to_dynamodb, load_conversation_state_from_dynamodb
+    read_pairs_from_dynamodb, load_conversation_state_from_dynamodb
 )
 
 
@@ -29,6 +29,8 @@ class MemoryManager:
         self.dynamodb = boto3.client('dynamodb', region_name=AWS_REGION)
         self.threads: Dict[str, ThreadState] = {}
         self._global_lock = threading.Lock()
+
+        self.table_name = CHAT_HISTORY_TABLE
         
         print(f"[MemoryManager] Initialized with table: {CHAT_HISTORY_TABLE}, region: {AWS_REGION}")
         print(f"[MemoryManager] Config - Context pairs: {CONTEXT_PAIRS}, Batch pairs: {BATCH_PAIRS}, Max RAM pairs: {MAX_RAM_PAIRS}")
@@ -72,10 +74,7 @@ class MemoryManager:
         """Flush batch buffer if it reaches the limit"""
         if len(thread_state.batch_pairs) >= BATCH_PAIRS:
             print(f"[MemoryManager] Batch limit reached ({len(thread_state.batch_pairs)} pairs), flushing for thread {thread_state.thread_id}")
-            batch_write_pairs_to_dynamodb(
-                self.dynamodb, thread_state.thread_id, 
-                thread_state.batch_pairs, thread_state.session_id
-            )
+            self._batch_write_pairs(thread_state.thread_id, thread_state.batch_pairs, thread_state.session_id)
             thread_state.batch_pairs.clear()
             print(f"[MemoryManager] Batch cleared for thread {thread_state.thread_id}")
     
@@ -85,12 +84,122 @@ class MemoryManager:
         if total_pairs > MAX_RAM_PAIRS:
             print(f"[MemoryManager] RAM limit exceeded ({total_pairs} > {MAX_RAM_PAIRS}), flushing batch early for thread {thread_state.thread_id}")
             # Flush batch early to stay within limit
-            batch_write_pairs_to_dynamodb(
-                self.dynamodb, thread_state.thread_id, 
-                thread_state.batch_pairs, thread_state.session_id
-            )
+            self._batch_write_pairs(thread_state.thread_id, thread_state.batch_pairs, thread_state.session_id)
             thread_state.batch_pairs.clear()
     
+    def _reserve_seq_block(self, thread_id: str, count: int) -> int:
+        """
+        Atomically increments the per-thread counter by `count` and returns the
+        starting seq for this block (inclusive). Requires a META row at seq=0.
+        """
+        if count <= 0:
+            return 0
+        # ensure meta row exists
+        try:
+            self.dynamodb.put_item(
+                TableName=self.table_name,
+                Item={
+                    "thread_id": {"S": thread_id},
+                    "seq": {"N": "0"},
+                    "meta_type": {"S": "COUNTERS"},
+                    "next_seq": {"N": "0"},
+                    "next_turn": {"N": "0"},
+                },
+                ConditionExpression="attribute_not_exists(thread_id) AND attribute_not_exists(seq)",
+            )
+        except self.dynamodb.exceptions.ConditionalCheckFailedException:
+            pass  # already there
+
+        resp = self.dynamodb.update_item(
+            TableName=self.table_name,
+            Key={"thread_id": {"S": thread_id}, "seq": {"N": "0"}},
+            UpdateExpression="ADD next_seq :inc",
+            ExpressionAttributeValues={":inc": {"N": str(count)}},
+            ReturnValues="UPDATED_NEW",
+        )
+        end_seq = int(resp["Attributes"]["next_seq"]["N"])
+        start_seq = end_seq - count + 1
+        return start_seq
+
+    def _assign_seqs_for_flush(self, thread_id: str, pairs: list) -> None:
+        """
+        Ensures every message in every pair has a unique seq. Mutates pairs in place.
+        Expects each pair like: {"turn": int, "user": {...}, "assistant": {...}}
+        Each inner dict can have 'seq' (int) already; only missing ones are assigned.
+        """
+        # gather messages that need seq
+        missing = []
+        for p in pairs:
+            if p and p.user_message and not isinstance(p.user_message.seq, int):
+                missing.append(p.user_message)
+            if p and p.assistant_message and not isinstance(p.assistant_message.seq, int):
+                missing.append(p.assistant_message)
+        if not missing:
+            return
+        start = self._reserve_seq_block(thread_id, len(missing))
+        for i, msg in enumerate(missing):
+            msg.seq = start + i
+
+    def _batch_write_pairs(self, thread_id: str, pairs: list, session_id: str) -> None:
+        if not pairs:
+            return
+
+        # ensure any missing seqs get unique values
+        self._assign_seqs_for_flush(thread_id, pairs)
+
+        items = []
+        for p in pairs:
+            turn = int(p.turn)
+
+            um = p.user_message
+            if um:
+                items.append({
+                    "thread_id": {"S": thread_id},
+                    "seq": {"N": str(int(um.seq))},
+                    "turn": {"N": str(turn)},
+                    "role": {"S": "user"},
+                    "content": {"S": str(um.content)[:38000]},
+                    "ts_iso": {"S": um.ts_iso or get_now_iso()},
+                    "session_id": {"S": session_id},
+                })
+
+            am = p.assistant_message
+            if am:
+                items.append({
+                    "thread_id": {"S": thread_id},
+                    "seq": {"N": str(int(am.seq))},
+                    "turn": {"N": str(turn)},
+                    "role": {"S": "assistant"},
+                    "content": {"S": str(am.content)[:38000]},
+                    "ts_iso": {"S": am.ts_iso or get_now_iso()},
+                    "session_id": {"S": session_id},
+                })
+
+        # defensive dup-key guard
+        seen = set()
+        for it in items:
+            k = (it["thread_id"]["S"], it["seq"]["N"])
+            if k in seen:
+                raise RuntimeError(f"Duplicate key in batch build: {k}")
+            seen.add(k)
+
+        # chunk <= 25 and write with retry on unprocessed
+        CHUNK = 25
+        i = 0
+        while i < len(items):
+            chunk = [{"PutRequest": {"Item": it}} for it in items[i:i+CHUNK]]
+            backoff = 0.5
+            while True:
+                resp = self.dynamodb.batch_write_item(RequestItems={self.table_name: chunk})
+                un = resp.get("UnprocessedItems", {}).get(self.table_name, [])
+                if not un:
+                    break
+                chunk = un
+                time.sleep(min(backoff, 4.0))
+                backoff *= 2
+            i += CHUNK
+
+
     def on_session_start(self, thread_id: str) -> None:
         """Initialize session, handle idle timeout, and load context"""
         print(f"[MemoryManager] Starting session for thread {thread_id}")
@@ -116,8 +225,14 @@ class MemoryManager:
                 # Update next_seq and next_turn based on loaded data
                 if pairs:
                     max_turn = max(p.turn for p in pairs)
-                    thread_state.next_seq = len(pairs) * 2 + 1  # Rough estimate
+                    max_seq = 0
+                    for p in pairs:
+                        if p.user_message and isinstance(p.user_message.seq, int):
+                            max_seq = max(max_seq, p.user_message.seq)
+                        if p.assistant_message and isinstance(p.assistant_message.seq, int):
+                            max_seq = max(max_seq, p.assistant_message.seq)
                     thread_state.next_turn = max_turn + 1
+                    thread_state.next_seq = max_seq + 1
                     print(f"[MemoryManager] Updated counters: next_seq={thread_state.next_seq}, next_turn={thread_state.next_turn}")
                 else:
                     print(f"[MemoryManager] No existing conversation found for thread {thread_id}")
@@ -230,10 +345,7 @@ class MemoryManager:
         with thread_state.lock:
             if thread_state.batch_pairs:
                 print(f"[MemoryManager] Manually flushing {len(thread_state.batch_pairs)} pairs from batch for thread {thread_id}")
-                batch_write_pairs_to_dynamodb(
-                    self.dynamodb, thread_id, 
-                    thread_state.batch_pairs, thread_state.session_id
-                )
+                self._batch_write_pairs(thread_id, thread_state.batch_pairs, thread_state.session_id)
                 thread_state.batch_pairs.clear()
             else:
                 print(f"[MemoryManager] No pairs in batch to flush for thread {thread_id}")
@@ -254,9 +366,7 @@ class MemoryManager:
             # Flush to DynamoDB
             if all_pairs:
                 print(f"[MemoryManager] Flushing all {len(all_pairs)} pairs for thread {thread_id}")
-                batch_write_pairs_to_dynamodb(
-                    self.dynamodb, thread_id, all_pairs, thread_state.session_id
-                )
+                self._batch_write_pairs(thread_id, all_pairs, thread_state.session_id)
             else:
                 print(f"[MemoryManager] No pairs to flush for thread {thread_id}")
             

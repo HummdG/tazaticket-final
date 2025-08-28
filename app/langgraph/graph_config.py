@@ -3,6 +3,7 @@ LangGraph configuration and setup for the flight search chatbot
 """
 
 import os
+import json, ast
 from typing import Annotated
 from typing_extensions import TypedDict
 from dotenv import load_dotenv
@@ -14,6 +15,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langchain_core.messages import ToolMessage, HumanMessage, AIMessage
 
 from ..tools.FlightSearchStateMachine import FlightSearchStateMachine
+from ..tools.travelport_utils import format_state_machine_summary_pretty
 from .memory_manager import memory_manager
 
 
@@ -198,3 +200,4 @@ def extract_last_ai_text(state: dict) -> str:
                 parts.append(str(part))
         return "\n".join([p for p in parts if p])
     return content if isinstance(content, str) else str(content)
+
