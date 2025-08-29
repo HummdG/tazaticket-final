@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 from typing import Dict, List, Set, Tuple
-import re
-import unicodedata
 
 # --- Minimal but high-signal catalog (expand anytime) -------------------------
 # Each entry may be:
@@ -79,7 +77,7 @@ CITY_TO_AIRPORTS: Dict[str, List[str]] = {
     "casablanca": ["CMN"],
 }
 
-# Metro “city” codes to constituent airports (round out behavior for LON/NYC/etc.)
+# Metro "city" codes to constituent airports (round out behavior for LON/NYC/etc.)
 METRO_TO_AIRPORTS: Dict[str, List[str]] = {
     "LON": ["LHR", "LGW", "LCY", "LTN", "STN", "SEN"],
     "PAR": ["CDG", "ORY", "BVA"],
@@ -105,76 +103,21 @@ PREFERRED_AIRPORT_FOR_METRO: Dict[str, str] = {
     "STO": "ARN",
 }
 
-# Common aliases / spellings / languages → canonical city key in CITY_TO_AIRPORTS
-ALIASES: Dict[str, str] = {
-    # Istanbul
-    "istambul": "istanbul",
-    "istanbol": "istanbul",
-    "istanbul sabiha": "istanbul",
-    "sabiha gokcen": "istanbul",
-    # Dubai
-    "deira": "dubai",
-    "dxbcity": "dubai",
-    # London
-    "uk london": "london",
-    "london city": "london",
-    "heathrow": "london",
-    "gatwick": "london",
-    # Lahore
-    "lahor": "lahore",
-    # Athens
-    "athina": "athens",
-    # Karachi / Islamabad
-    "khi": "karachi",
-    "isl": "islamabad",
-    # Abbreviations
-    "nyc": "new york",
-    "lon": "london",
-    "par": "paris",
-    "rom": "rome",
-    "tyo": "tokyo",
-}
-
-IATA_AIRPORTS: Set[str] = (
-    set(a for v in CITY_TO_AIRPORTS.values() for a in v)
-    | set(a for v in METRO_TO_AIRPORTS.values() for a in v)
-)
-
-# --- Normalization ------------------------------------------------------------
-
-def _norm(s: str) -> str:
-    s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode("ascii")
-    s = re.sub(r"[^a-z0-9\s]", " ", s.lower())
-    s = re.sub(r"\s+", " ", s).strip()
-    return s
-
-# Build a lookup from normalized phrase → list of airport codes
-def build_city_lookup() -> Dict[str, List[str]]:
-    lut: Dict[str, List[str]] = {}
-    for city, airports in CITY_TO_AIRPORTS.items():
-        lut[_norm(city)] = airports
-    for alias, city in ALIASES.items():
-        if city in CITY_TO_AIRPORTS:
-            lut[_norm(alias)] = CITY_TO_AIRPORTS[city]
-    return lut
-
-CITY_LOOKUP = build_city_lookup()
-
 # --- Public helpers -----------------------------------------------------------
 
 def resolve_phrase_to_airports(phrase: str) -> Tuple[str, List[str]]:
     """
-    Given any phrase ("istanbul", "lhr", "new york", "LON", "Heathrow"),
+    Given any phrase ("istanbul", "lhr", "new york", "LON"),
     return (preferred_code, all_possible_codes).
 
     If an explicit IATA airport is found (3 letters), that wins.
-    If a metro code (LON/NYC/ROM/…) is found, return the preferred single airport,
-    and list of all airports for that metro.
-    Otherwise try to match city/alias strings from CITY_LOOKUP.
+    If a metro code (LON/NYC/ROM/…) is found, return the preferred single airport.
+    Otherwise try to match city strings from CITY_TO_AIRPORTS.
     """
     if not phrase:
         return "", []
 
+    # Check if it's already a 3-letter IATA code
     raw = phrase.strip().upper()
     if len(raw) == 3 and raw.isalpha():
         # Looks like an IATA code
@@ -183,30 +126,16 @@ def resolve_phrase_to_airports(phrase: str) -> Tuple[str, List[str]]:
             return PREFERRED_AIRPORT_FOR_METRO.get(raw, alts[0]), alts
         return raw, [raw]
 
-    norm = _norm(phrase)
-
-    # Direct city/alias match
-    if norm in CITY_LOOKUP:
-        alts = CITY_LOOKUP[norm]
-        # If first is a metro, map to preferred single airport for payloads that need one
+    # Direct city match (case insensitive)
+    city_key = phrase.strip().lower()
+    if city_key in CITY_TO_AIRPORTS:
+        alts = CITY_TO_AIRPORTS[city_key]
+        # If first is a metro, map to preferred single airport
         first = alts[0]
         if first in METRO_TO_AIRPORTS:
             metro = first
             return PREFERRED_AIRPORT_FOR_METRO.get(metro, METRO_TO_AIRPORTS[metro][0]), METRO_TO_AIRPORTS[metro]
         return alts[0], alts
-
-    # Try token window search (multi-word phrases in a longer sentence)
-    tokens = norm.split()
-    for win in range(min(4, len(tokens)), 0, -1):
-        for i in range(0, len(tokens) - win + 1):
-            chunk = " ".join(tokens[i:i+win])
-            if chunk in CITY_LOOKUP:
-                alts = CITY_LOOKUP[chunk]
-                first = alts[0]
-                if first in METRO_TO_AIRPORTS:
-                    metro = first
-                    return PREFERRED_AIRPORT_FOR_METRO.get(metro, METRO_TO_AIRPORTS[metro][0]), METRO_TO_AIRPORTS[metro]
-                return alts[0], alts
 
     # No match
     return "", []
