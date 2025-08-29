@@ -15,7 +15,6 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langchain_core.messages import ToolMessage, HumanMessage, AIMessage
 
 from ..tools.FlightSearchStateMachine import FlightSearchStateMachine
-from ..tools.travelport_utils import format_state_machine_summary_pretty
 from .memory_manager import memory_manager
 
 

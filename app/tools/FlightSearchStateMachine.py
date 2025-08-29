@@ -17,6 +17,7 @@ from .airline_codes import (
     get_airline_name, 
     parse_carrier_preference
 )
+from .city_codes import resolve_phrase_to_airports
 
 # State machine storage per thread
 state_machines = {}
@@ -26,6 +27,25 @@ def get_or_create_state_machine(thread_id: str) -> ConversationFlowSM:
     if thread_id not in state_machines:
         state_machines[thread_id] = ConversationFlowSM()
     return state_machines[thread_id]
+
+def resolve_city_to_iata(city_input: str) -> str:
+    """
+    Convert natural language city names to IATA codes using city_codes.py
+    Returns the preferred IATA code or the original input if no match found
+    """
+    if not city_input:
+        return city_input
+    
+    # Try to resolve the phrase to airport codes
+    preferred_code, all_codes = resolve_phrase_to_airports(city_input)
+    
+    if preferred_code:
+        print(f"[CityMapper] Resolved '{city_input}' to IATA code '{preferred_code}'")
+        return preferred_code
+    else:
+        # If no match found, keep the original (might already be an IATA code)
+        print(f"[CityMapper] No mapping found for '{city_input}', keeping as-is")
+        return city_input.upper()
 
 def format_duration(minutes: int) -> str:
     """Format duration in minutes to Xh Ym"""
@@ -145,11 +165,13 @@ def FlightSearchStateMachine(
     # Parse carrier preference from user input
     preferred_carriers = parse_carrier_preference(user_input_text) if user_input_text else DEFAULT_PREFERRED_CARRIERS
     
-    # Update provided fields
+    # Update provided fields with city-to-IATA mapping
     if origin:
-        sm.set_variable('origin', origin.upper())
+        iata_origin = resolve_city_to_iata(origin)
+        sm.set_variable('origin', iata_origin)
     if destination:
-        sm.set_variable('destination', destination.upper())
+        iata_destination = resolve_city_to_iata(destination)
+        sm.set_variable('destination', iata_destination)
     if departure_date:
         corrected_departure = fix_date_year(departure_date)
         sm.set_variable('departure_date', corrected_departure)
