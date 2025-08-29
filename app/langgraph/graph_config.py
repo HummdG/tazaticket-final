@@ -14,7 +14,7 @@ from langgraph.graph.message import add_messages
 from langgraph.checkpoint.memory import InMemorySaver
 from langchain_core.messages import ToolMessage, HumanMessage, AIMessage
 
-from ..tools.FlightSearchStateMachine import FlightSearchStateMachine
+from ..tools.FlightSearchStateMachine import FlightSearchStateMachine, BulkFlightSearch
 from .memory_manager import memory_manager
 
 
@@ -37,17 +37,20 @@ class BasicToolNode:
         
         outputs = []
         for tool_call in message.tool_calls:
-            # Pass thread_id and user_input_text to FlightSearchStateMachine if needed
+            # Pass thread_id and user_input_text to tools that need them
             tool_args = tool_call["args"]
-            if tool_call["name"] == "FlightSearchStateMachine":
+            if tool_call["name"] in ["FlightSearchStateMachine", "BulkFlightSearch"]:
                 if "thread_id" not in tool_args:
                     # Extract thread_id from the graph state if available
-                    tool_args["thread_id"] = inputs.get("configurable", {}).get("thread_id", "default")
-                if "user_input_text" not in tool_args or not tool_args["user_input_text"]:
-                    # Find the original user message for carrier parsing
-                    user_messages = [msg for msg in inputs.get("messages", []) if hasattr(msg, "type") and msg.type == "human"]
-                    if user_messages:
-                        tool_args["user_input_text"] = user_messages[-1].content
+                    extracted_thread_id = inputs.get("configurable", {}).get("thread_id", "default")
+                    tool_args["thread_id"] = extracted_thread_id
+                    print(f"[BasicToolNode] Setting thread_id for {tool_call['name']}: {extracted_thread_id}")
+                if tool_call["name"] in ["FlightSearchStateMachine", "BulkFlightSearch"]:
+                    if "user_input_text" not in tool_args or not tool_args["user_input_text"]:
+                        # Find the original user message for carrier parsing
+                        user_messages = [msg for msg in inputs.get("messages", []) if hasattr(msg, "type") and msg.type == "human"]
+                        if user_messages:
+                            tool_args["user_input_text"] = user_messages[-1].content
             
             tool_result = self.tools_by_name[tool_call["name"]].invoke(tool_args)
             outputs.append(
@@ -95,7 +98,7 @@ def create_graph():
         raise ValueError("OPENAI_API_KEY environment variable is not set")
     
     # Initialize tools
-    tools = [FlightSearchStateMachine]
+    tools = [FlightSearchStateMachine, BulkFlightSearch]
     
     # Initialize LLM
     llm = init_chat_model("gpt-4o-mini", model_provider="openai", temperature=0)

@@ -21,6 +21,7 @@ CITY_TO_AIRPORTS: Dict[str, List[str]] = {
     "amsterdam": ["AMS"],
     "frankfurt": ["FRA"],
     "munich": ["MUC"],
+    "berlin": ["BER", "TXL"],  # BER is the new main airport, TXL was the old one
     "zurich": ["ZRH"],
     "vienna": ["VIE"],
     "barcelona": ["BCN"],

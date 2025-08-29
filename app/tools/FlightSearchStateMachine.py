@@ -6,6 +6,7 @@ from langchain_core.tools import tool
 from datetime import datetime, timedelta
 import re
 from typing import Optional
+import asyncio
 
 # Import required modules
 from ..statemachine.ConversationFlowSM import ConversationFlowSM
@@ -18,6 +19,13 @@ from .airline_codes import (
     parse_carrier_preference
 )
 from .city_codes import resolve_phrase_to_airports
+from .travelport_utils import (
+    parse_date_range,
+    bulk_search_cheapest_async,
+    calculate_return_date,
+    is_bulk_search_query,
+    extract_return_duration
+)
 
 # State machine storage per thread
 state_machines = {}
@@ -292,4 +300,177 @@ def FlightSearchStateMachine(
             return f"Sorry, there was an error searching for flights: {str(e)}"
     else:
         missing = sm.get_missing_variables()
-        return f"Flight search in progress. Still need: {', '.join(missing)}. Please provide these details to continue." 
+        return f"Flight search in progress. Still need: {', '.join(missing)}. Please provide these details to continue."
+
+
+@tool("BulkFlightSearch")
+def BulkFlightSearch(
+    origin: Optional[str] = None,
+    destination: Optional[str] = None,
+    user_input_text: str = "",
+    number_of_passengers: int = 1,
+    thread_id: str = "default",
+):
+    """
+    Detects and handles bulk flight search requests for date ranges.
+    Call this tool when user asks for cheapest tickets over a period of time.
+    
+    Examples:
+    - "find me the cheapest ticket in November"
+    - "cheapest flight next week"
+    - "best price between 2025-01-01 and 2025-01-31"
+    
+    This tool will:
+    1. Detect if it's a bulk search request
+    2. Ask for return ticket confirmation if needed
+    3. Perform async searches across all dates
+    4. Return the cheapest option found
+    """
+    
+    # Check if this is actually a bulk search request
+    if not is_bulk_search_query(user_input_text):
+        return "This doesn't appear to be a bulk search request. Please use the regular FlightSearchStateMachine tool for single date searches."
+    
+    # Resolve cities to IATA codes
+    if origin:
+        origin = resolve_city_to_iata(origin)
+    if destination:
+        destination = resolve_city_to_iata(destination)
+    
+    # Early check for duplicate searches after city resolution
+    search_key = f"{thread_id}:{origin}:{destination}"
+    from .travelport_utils import _active_searches
+    if any(key.startswith(search_key) for key in _active_searches):
+        return "I'm already processing a bulk search for this route. Please wait for the current search to complete."
+    
+    # Check if we have minimum required information
+    if not origin or not destination:
+        return "I need both origin and destination cities to perform a bulk search. Please provide the missing information."
+    
+    # Parse carrier preference from user input
+    preferred_carriers = parse_carrier_preference(user_input_text) if user_input_text else DEFAULT_PREFERRED_CARRIERS
+    
+    # Parse date range from user input
+    dates, is_bulk = parse_date_range(user_input_text)
+    
+    if not is_bulk or not dates:
+        return "I couldn't detect a valid date range for bulk search. Please specify a time period like 'in November', 'next week', or 'between 2025-01-01 and 2025-01-31'."
+    
+
+    
+    # Check if user wants return tickets
+    return_duration = extract_return_duration(user_input_text)
+    wants_return = any(keyword in user_input_text.lower() for keyword in ['return', 'round trip', 'roundtrip', 'round-trip'])
+    
+    # Determine trip type
+    trip_type = "one-way"
+    if wants_return and return_duration:
+        trip_type = "one-way"  # We'll handle return separately for bulk search
+    elif wants_return:
+        return f"""🔍 I found a bulk search request for {origin} to {destination} across {len(dates)} dates.
+
+For return tickets, please specify how many days later you want to return (e.g., "10 days later", "1 week later").
+
+Without return duration specified, I'll search for one-way tickets only."""
+    
+    # Queue the bulk search for background processing and return immediate acknowledgment
+    try:
+        from .travelport_utils import queue_bulk_search_task, execute_bulk_search_background
+        
+        # For date ranges larger than 5, use background processing to avoid timeout
+        print(f"[BulkFlightSearch] Thread ID received: {thread_id}")
+        if len(dates) > 5:
+            # Queue the search task for background execution
+            print(f"[BulkFlightSearch] Queueing background task with thread_id: {thread_id}")
+            queue_bulk_search_task(
+                execute_bulk_search_background,
+                origin=origin,
+                destination=destination, 
+                dates=dates,
+                number_of_passengers=number_of_passengers,
+                carriers=preferred_carriers,
+                trip_type=trip_type,
+                thread_id=thread_id,
+                user_phone=None,  # Not needed, we'll use thread_id directly
+                original_user_input=user_input_text
+            )
+            
+            # Return immediate acknowledgment
+            response = f"🔍 BULK SEARCH STARTED!\n\n"
+            response += f"✈️ Searching {origin} → {destination}\n"
+            response += f"📅 Checking {len(dates)} dates for best prices\n"
+            response += f"⏳ This will take a few minutes...\n\n"
+            response += f"I'll send you the results as soon as I find the cheapest option! 🎯"
+            
+            if return_duration:
+                response += f"\n\n🔄 I'll also calculate return flights {return_duration} days later."
+            
+            return response
+        
+        else:
+            # For smaller searches (≤5 dates), execute immediately 
+            from .travelport_utils import bulk_search_cheapest_sync
+            
+            bulk_result = bulk_search_cheapest_sync(
+                origin=origin,
+                destination=destination,
+                dates=dates,
+                number_of_passengers=number_of_passengers,
+                carriers=preferred_carriers,
+                trip_type=trip_type
+            )
+            
+            if not bulk_result.get("ok"):
+                return f"Bulk search failed: {bulk_result.get('error', 'Unknown error')}"
+            
+            cheapest = bulk_result.get("cheapest_result")
+            if not cheapest:
+                return f"No flights found across {bulk_result.get('total_searches', 0)} dates searched."
+            
+            # Format the result (same as before for small searches)
+            summary = cheapest.get("summary")
+            search_date = cheapest.get("search_date")
+            
+            price = summary.get("price", {})
+            price_text = f"{price.get('total')} {price.get('currency')}" if price.get('total') else "Price not available"
+            
+            duration = format_duration(summary.get("duration_minutes_total"))
+            stops = format_stops(summary.get("stops_total", 0))
+            
+            response = f"🎯 CHEAPEST OPTION FOUND!\n\n"
+            response += f"✈️ {origin} → {destination} on {search_date}\n"
+            response += f"💰 Price: {price_text}\n"
+            response += f"⏱️ Duration: {duration}, {stops}\n"
+            
+            it = summary.get("itinerary", {})
+            if it.get("airlines"):
+                response += f"🏢 Airline: {it['airlines']}\n"
+            if it.get("flight_numbers"):
+                response += f"🔢 Flight: {it['flight_numbers']}\n"
+            
+            # Add layover info
+            lf = format_layovers(it)
+            if lf:
+                response += lf
+            
+            if summary.get("baggage"):
+                response += f"🧳 Baggage: {format_baggage_summary(summary['baggage'])}\n"
+            
+            response += f"\n📊 Search Summary: {bulk_result.get('search_summary')}"
+            
+            # Handle return trip if requested
+            if return_duration:
+                from .travelport_utils import calculate_return_date
+                return_date = calculate_return_date(search_date, return_duration)
+                response += f"\n\n🔄 For return trip {return_duration} days later ({return_date}), would you like me to search for return flights?"
+            
+            return response
+        
+    except Exception as e:
+        return f"Error setting up bulk search: {str(e)}"
+
+
+
+
+
+ 

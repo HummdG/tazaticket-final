@@ -559,3 +559,732 @@ def extract_cheapest_round_trip_summary(resp: Dict[str, Any]) -> Optional[Dict[s
     }
 
    
+
+# ------------------------------
+# Bulk Search Helper Functions
+# ------------------------------
+
+import asyncio
+from datetime import datetime, timedelta
+from typing import List, Dict, Any, Optional, Tuple
+import calendar
+
+def parse_date_range(user_input: str, departure_date: Optional[str] = None) -> Tuple[List[str], bool]:
+    """
+    Parse user input to detect bulk search patterns and return list of dates.
+    Returns (list_of_dates, is_bulk_search)
+    
+    Examples:
+    - "find me cheapest ticket in november" -> all days in current year November
+    - "find me cheapest ticket next week" -> next 7 days  
+    - "cheapest ticket between 2025-01-01 and 2025-01-31" -> date range
+    - "cheapest ticket on 2025-01-15" -> single date (not bulk)
+    """
+    user_input_lower = user_input.lower()
+    today = datetime.now().date()
+    
+    # Single date patterns - not bulk search
+    single_date_patterns = [
+        r'on \d{4}-\d{2}-\d{2}',
+        r'for \d{4}-\d{2}-\d{2}',
+        r'tomorrow',
+        r'today'
+    ]
+    
+    import re
+    for pattern in single_date_patterns:
+        if re.search(pattern, user_input_lower):
+            if departure_date:
+                return [departure_date], False
+            return [], False
+    
+    # Bulk search patterns
+    bulk_patterns = {
+        'november': ('month', 11),
+        'december': ('month', 12),
+        'january': ('month', 1),
+        'february': ('month', 2),
+        'march': ('month', 3),
+        'april': ('month', 4),
+        'may': ('month', 5),
+        'june': ('month', 6),
+        'july': ('month', 7),
+        'august': ('month', 8),
+        'september': ('month', 9),
+        'october': ('month', 10),
+        'next week': ('next_week', None),
+        'this week': ('this_week', None),
+        'next month': ('next_month', None),
+        'this month': ('this_month', None),
+    }
+    
+    dates = []
+    is_bulk = False
+    
+    # Check for month patterns
+    for pattern, (period_type, month_num) in bulk_patterns.items():
+        if pattern in user_input_lower:
+            is_bulk = True
+            if period_type == 'month' and month_num:
+                # Generate all days in the specified month
+                year = today.year
+                if month_num < today.month:
+                    year += 1  # Next year if month already passed
+                
+                # Get number of days in month
+                days_in_month = calendar.monthrange(year, month_num)[1]
+                
+                for day in range(1, days_in_month + 1):
+                    date_str = f"{year:04d}-{month_num:02d}-{day:02d}"
+                    dates.append(date_str)
+                    
+            elif period_type == 'next_week':
+                # Next 7 days starting from tomorrow
+                start_date = today + timedelta(days=1)
+                for i in range(7):
+                    date_str = (start_date + timedelta(days=i)).strftime('%Y-%m-%d')
+                    dates.append(date_str)
+                    
+            elif period_type == 'this_week':
+                # Remaining days of current week
+                days_until_sunday = (6 - today.weekday()) % 7
+                for i in range(days_until_sunday + 1):
+                    date_str = (today + timedelta(days=i)).strftime('%Y-%m-%d')
+                    dates.append(date_str)
+                    
+            elif period_type == 'next_month':
+                # All days in next month
+                if today.month == 12:
+                    next_month = 1
+                    next_year = today.year + 1
+                else:
+                    next_month = today.month + 1
+                    next_year = today.year
+                
+                days_in_month = calendar.monthrange(next_year, next_month)[1]
+                for day in range(1, days_in_month + 1):
+                    date_str = f"{next_year:04d}-{next_month:02d}-{day:02d}"
+                    dates.append(date_str)
+                    
+            elif period_type == 'this_month':
+                # Remaining days in current month
+                days_in_month = calendar.monthrange(today.year, today.month)[1]
+                for day in range(today.day, days_in_month + 1):
+                    date_str = f"{today.year:04d}-{today.month:02d}-{day:02d}"
+                    dates.append(date_str)
+            break
+    
+    # Check for "between X and Y" pattern
+    between_pattern = r'between\s+(\d{4}-\d{2}-\d{2})\s+and\s+(\d{4}-\d{2}-\d{2})'
+    match = re.search(between_pattern, user_input_lower)
+    if match:
+        is_bulk = True
+        start_date_str, end_date_str = match.groups()
+        try:
+            start_date = datetime.strptime(start_date_str, '%Y-%m-%d').date()
+            end_date = datetime.strptime(end_date_str, '%Y-%m-%d').date()
+            
+            current_date = start_date
+            while current_date <= end_date:
+                dates.append(current_date.strftime('%Y-%m-%d'))
+                current_date += timedelta(days=1)
+        except ValueError:
+            pass  # Invalid date format
+    
+    return dates, is_bulk
+
+
+async def search_single_date_async(payload_func, origin: str, destination: str, date: str, 
+                                 number_of_passengers: int, carriers: List[str], trip_type: str = "one-way") -> Dict[str, Any]:
+    """
+    Perform a single date search asynchronously.
+    Returns the search result with the date included for tracking.
+    """
+    try:
+        # Import here to avoid circular imports
+        from .TravelportSearch import TravelportSearch
+        
+        # Create payload for this specific date
+        payload = payload_func(
+            origin=origin,
+            destination=destination,
+            departure_date=date,
+            number_of_passengers=number_of_passengers,
+            carriers=carriers
+        )
+        
+        # Perform the search (this is blocking, but we're calling it in an executor)
+        result = TravelportSearch.invoke({"payload": payload, "trip_type": trip_type})
+        
+        # Add date information to result
+        result["search_date"] = date
+        return result
+        
+    except Exception as e:
+        return {
+            "ok": False,
+            "error": f"Search failed for {date}: {str(e)}",
+            "search_date": date,
+            "summary": None
+        }
+
+
+async def bulk_search_cheapest_async(origin: str, destination: str, dates: List[str], 
+                                   number_of_passengers: int, carriers: List[str], 
+                                   trip_type: str = "one-way") -> Dict[str, Any]:
+    """
+    Perform bulk search across multiple dates to find the cheapest option.
+    Returns the cheapest result with details about all searches performed.
+    """
+    if not dates:
+        return {
+            "ok": False,
+            "error": "No dates provided for bulk search",
+            "cheapest_result": None,
+            "all_results": []
+        }
+    
+    # Import payload functions
+    if trip_type == "one-way":
+        from ..payloads.OneWayFlightSearch import OneWayFlightSearch
+        payload_func = OneWayFlightSearch
+    else:
+        from ..payloads.RoundTripFlightSearch import RoundTripFlightSearch
+        payload_func = RoundTripFlightSearch
+    
+    # Create tasks for all date searches
+    tasks = []
+    for date in dates:
+        task = asyncio.create_task(
+            search_single_date_async(payload_func, origin, destination, date, 
+                                   number_of_passengers, carriers, trip_type)
+        )
+        tasks.append(task)
+    
+    # Wait for all searches to complete
+    try:
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+    except Exception as e:
+        return {
+            "ok": False,
+            "error": f"Bulk search failed: {str(e)}",
+            "cheapest_result": None,
+            "all_results": []
+        }
+    
+    # Process results
+    valid_results = []
+    cheapest_result = None
+    cheapest_price = float('inf')
+    
+    for result in results:
+        if isinstance(result, Exception):
+            continue
+            
+        if result.get("ok") and result.get("summary"):
+            valid_results.append(result)
+            
+            # Extract price based on trip type
+            summary = result["summary"]
+            if trip_type == "round-trip" and summary.get("price_total"):
+                price = summary["price_total"].get("total")
+            elif trip_type == "one-way" and summary.get("price"):
+                price = summary["price"].get("total")
+            else:
+                continue
+                
+            if price and float(price) < cheapest_price:
+                cheapest_price = float(price)
+                cheapest_result = result
+    
+    return {
+        "ok": len(valid_results) > 0,
+        "cheapest_result": cheapest_result,
+        "cheapest_price": cheapest_price if cheapest_price != float('inf') else None,
+        "total_searches": len(dates),
+        "successful_searches": len(valid_results),
+        "all_results": valid_results,
+        "search_summary": f"Searched {len(dates)} dates, found {len(valid_results)} valid options"
+    }
+
+
+def bulk_search_cheapest_sync(origin: str, destination: str, dates: List[str], 
+                             number_of_passengers: int, carriers: List[str], 
+                             trip_type: str = "one-way") -> Dict[str, Any]:
+    """
+    Perform bulk search across multiple dates to find the cheapest option (synchronous version).
+    Returns the cheapest result with details about all searches performed.
+    
+    This version processes searches sequentially to avoid async complications in the LangChain tool context.
+    For very large date ranges, this might be slower but more reliable.
+    """
+    if not dates:
+        return {
+            "ok": False,
+            "error": "No dates provided for bulk search",
+            "cheapest_result": None,
+            "all_results": []
+        }
+    
+    # Import payload functions and TravelportSearch
+    try:
+        from .TravelportSearch import TravelportSearch
+        if trip_type == "one-way":
+            from ..payloads.OneWayFlightSearch import OneWayFlightSearch
+            payload_func = OneWayFlightSearch
+        else:
+            from ..payloads.RoundTripFlightSearch import RoundTripFlightSearch
+            payload_func = RoundTripFlightSearch
+    except ImportError as e:
+        return {
+            "ok": False,
+            "error": f"Import error: {str(e)}",
+            "cheapest_result": None,
+            "all_results": []
+        }
+    
+    # Process searches sequentially
+    valid_results = []
+    cheapest_result = None
+    cheapest_price = float('inf')
+    
+    # For bulk search, process all dates (remove artificial limit)
+    limited_dates = dates
+    print(f"[BulkSearch] Processing all {len(limited_dates)} dates for bulk search")
+    
+    for i, date in enumerate(limited_dates):
+        try:
+            print(f"[BulkSearch] Searching date {i+1}/{len(limited_dates)}: {date}")
+            
+            # Create payload for this specific date
+            payload = payload_func(
+                origin=origin,
+                destination=destination,
+                departure_date=date,
+                number_of_passengers=number_of_passengers,
+                carriers=carriers
+            )
+            
+            # Perform the search
+            result = TravelportSearch.invoke({"payload": payload, "trip_type": trip_type})
+            print(f"[BulkSearch] Completed search for {date}: {'OK' if result.get('ok') else 'FAILED'}")
+            
+            # Add date information to result
+            result["search_date"] = date
+            
+            if result.get("ok") and result.get("summary"):
+                valid_results.append(result)
+                
+                # Extract price based on trip type
+                summary = result["summary"]
+                if trip_type == "round-trip" and summary.get("price_total"):
+                    price = summary["price_total"].get("total")
+                elif trip_type == "one-way" and summary.get("price"):
+                    price = summary["price"].get("total")
+                else:
+                    continue
+                    
+                if price and float(price) < cheapest_price:
+                    cheapest_price = float(price)
+                    cheapest_result = result
+                    
+        except Exception as e:
+            # Log the error but continue with other dates
+            print(f"[BulkSearch] Search failed for {date}: {str(e)}")
+            continue
+    
+    return {
+        "ok": len(valid_results) > 0,
+        "cheapest_result": cheapest_result,
+        "cheapest_price": cheapest_price if cheapest_price != float('inf') else None,
+        "total_searches": len(limited_dates),
+        "successful_searches": len(valid_results),
+        "all_results": valid_results,
+        "search_summary": f"Searched {len(limited_dates)} dates, found {len(valid_results)} valid options"
+    }
+
+
+def calculate_return_date(departure_date: str, days_offset: int) -> str:
+    """
+    Calculate return date by adding days to departure date.
+    Used when user specifies return trip duration like "10 days later".
+    """
+    try:
+        dep_date = datetime.strptime(departure_date, '%Y-%m-%d')
+        return_date = dep_date + timedelta(days=days_offset)
+        return return_date.strftime('%Y-%m-%d')
+    except ValueError:
+        return departure_date  # Fallback to original if parsing fails
+
+
+def is_bulk_search_query(user_input: str) -> bool:
+    """
+    Quick check to determine if user input indicates a bulk search request.
+    """
+    bulk_indicators = [
+        'cheapest in',
+        'cheapest ticket in',
+        'cheapest flight in', 
+        'find cheapest',
+        'best price in',
+        'lowest fare in',
+        'between',
+        'next week',
+        'this week',
+        'next month',
+        'this month',
+        'november',
+        'december',
+        'january',
+        'february',
+        'march',
+        'april',
+        'may',
+        'june',
+        'july',
+        'august',
+        'september',
+        'october'
+    ]
+    
+    user_lower = user_input.lower()
+    return any(indicator in user_lower for indicator in bulk_indicators)
+
+
+def extract_return_duration(user_input: str) -> Optional[int]:
+    """
+    Extract return duration from user input.
+    Examples: "10 days", "2 weeks", "1 week"
+    Returns number of days or None if not found.
+    """
+    import re
+    
+    # Pattern for "X days"
+    days_match = re.search(r'(\d+)\s*days?', user_input.lower())
+    if days_match:
+        return int(days_match.group(1))
+    
+    # Pattern for "X weeks"  
+    weeks_match = re.search(r'(\d+)\s*weeks?', user_input.lower())
+    if weeks_match:
+        return int(weeks_match.group(1)) * 7
+        
+    # Pattern for "a week" or "one week"
+    if re.search(r'\b(a|one)\s*week\b', user_input.lower()):
+        return 7
+        
+    return None
+
+   
+
+# ------------------------------
+# Background Task Queue for Async Bulk Search
+# ------------------------------
+
+import threading
+import time
+from queue import Queue
+from typing import Callable
+
+# Global task queue for background processing
+_task_queue = Queue()
+_worker_running = False
+_worker_thread = None
+_active_searches = set()  # Track active searches to prevent duplicates
+_pending_messages = {}  # Storage for pending messages
+
+def _background_worker():
+    """Background worker that processes bulk search tasks"""
+    global _worker_running
+    print("[BulkSearch] Background worker started")
+    
+    while _worker_running:
+        try:
+            # Get task from queue (blocks for up to 1 second)
+            task = _task_queue.get(timeout=1.0)
+            
+            if task is None:  # Shutdown signal
+                break
+                
+            # Execute the task
+            task_func, args, kwargs = task
+            try:
+                task_func(*args, **kwargs)
+            except Exception as e:
+                print(f"[BulkSearch] Task execution error: {e}")
+            finally:
+                _task_queue.task_done()
+                
+        except:
+            # Timeout or queue empty, continue
+            continue
+    
+    print("[BulkSearch] Background worker stopped")
+
+def start_background_worker():
+    """Start the background worker thread"""
+    global _worker_running, _worker_thread
+    
+    if not _worker_running:
+        _worker_running = True
+        _worker_thread = threading.Thread(target=_background_worker, daemon=True)
+        _worker_thread.start()
+        print("[BulkSearch] Background worker thread started")
+
+def stop_background_worker():
+    """Stop the background worker thread"""
+    global _worker_running, _worker_thread
+    
+    if _worker_running:
+        _worker_running = False
+        _task_queue.put(None)  # Shutdown signal
+        if _worker_thread:
+            _worker_thread.join(timeout=2.0)
+        print("[BulkSearch] Background worker stopped")
+
+def queue_bulk_search_task(task_func: Callable, *args, **kwargs):
+    """Add a bulk search task to the background queue"""
+    if not _worker_running:
+        start_background_worker()
+    
+    print(f"[BulkSearch] Queueing task with kwargs: {kwargs}")
+    _task_queue.put((task_func, args, kwargs))
+    print(f"[BulkSearch] Task queued for background processing")
+
+
+def execute_bulk_search_background(origin: str, destination: str, dates: List[str], 
+                                 number_of_passengers: int, carriers: List[str],
+                                 trip_type: str, thread_id: str = "unknown", user_phone: str = None,
+                                 original_user_input: str = ""):
+    """
+    Execute bulk search in background and send result via callback.
+    This function runs in a separate thread.
+    """
+    search_key = f"{thread_id}:{origin}:{destination}:{len(dates)}"
+    
+    # Check if this search is already running
+    global _active_searches
+    if search_key in _active_searches:
+        print(f"[BulkSearch] Search already running for {search_key}, skipping duplicate")
+        return
+    
+    _active_searches.add(search_key)
+    print(f"[BulkSearch] Starting background bulk search for {len(dates)} dates")
+    print(f"[BulkSearch] Background search thread_id: {thread_id}")
+    
+    try:
+        # Perform the bulk search
+        bulk_result = bulk_search_cheapest_sync(
+            origin=origin,
+            destination=destination,
+            dates=dates,
+            number_of_passengers=number_of_passengers,
+            carriers=carriers,
+            trip_type=trip_type
+        )
+        
+        # Format the response message
+        if bulk_result.get("ok") and bulk_result.get("cheapest_result"):
+            cheapest = bulk_result["cheapest_result"]
+            summary = cheapest.get("summary")
+            search_date = cheapest.get("search_date")
+            
+            price = summary.get("price", {})
+            price_text = f"{price.get('total')} {price.get('currency')}" if price.get('total') else "Price not available"
+            
+            # Import here to avoid circular imports
+            from ..tools.FlightSearchStateMachine import format_duration, format_stops, format_layovers, format_baggage_summary
+            
+            duration = format_duration(summary.get("duration_minutes_total"))
+            stops = format_stops(summary.get("stops_total", 0))
+            
+            message = f"🎯 Cheapest option found!\n\n"
+            message += f"✈️ {origin} → {destination} on {search_date}\n"
+            message += f"💰 Price: {price_text}\n"
+            message += f"⏱️ Duration: {duration}, {stops}\n"
+            
+            it = summary.get("itinerary", {})
+            if it.get("airlines"):
+                message += f"🏢 Airline: {it['airlines']}\n"
+            if it.get("flight_numbers"):
+                message += f"🔢 Flight: {it['flight_numbers']}\n"
+            
+            # Add layover information
+            layovers = it.get("layovers", [])
+            if layovers:
+                layover_info = ", ".join([f"{l.get('airport_code', l.get('city', 'Unknown'))} ({l.get('duration', 'Unknown')})" for l in layovers])
+                message += f"🔄 Layovers: {layover_info}\n"
+            
+            if summary.get("baggage"):
+                message += f"🧳 Baggage: {format_baggage_summary(summary['baggage'])}\n"
+            
+            message += f"\n📊 Searched {bulk_result.get('total_searches')} dates, found {bulk_result.get('successful_searches')} options"
+            
+            # Check if this is a return trip request and search for return flights
+            return_duration = extract_return_duration(original_user_input)
+            if return_duration and cheapest:
+                try:
+                    from datetime import datetime, timedelta
+                    
+                    # Calculate return date
+                    departure_date = datetime.strptime(search_date, '%Y-%m-%d')
+                    return_date = departure_date + timedelta(days=return_duration)
+                    return_date_str = return_date.strftime('%Y-%m-%d')
+                    
+                    # Search for return flight
+                    if trip_type == "one-way":
+                        from ..payloads.OneWayFlightSearch import OneWayFlightSearch
+                        return_payload = OneWayFlightSearch(
+                            origin=destination,  # Reversed
+                            destination=origin,   # Reversed
+                            departure_date=return_date_str,
+                            number_of_passengers=number_of_passengers,
+                            carriers=carriers
+                        )
+                        
+                        from .TravelportSearch import TravelportSearch
+                        return_result = TravelportSearch.invoke({"payload": return_payload, "trip_type": "one-way"})
+                        
+                        if return_result.get("ok") and return_result.get("summary"):
+                            return_summary = return_result["summary"]
+                            return_price = return_summary.get("price", {})
+                            return_price_text = f"{return_price.get('total')} {return_price.get('currency')}" if return_price.get('total') else "Price not available"
+                            return_duration_text = format_duration(return_summary.get("duration_minutes_total"))
+                            return_stops = format_stops(return_summary.get("stops_total", 0))
+                            
+                            message += f"\n\n🔄 Return flight ({return_duration} days later):\n"
+                            message += f"✈️ {destination} → {origin} on {return_date_str}\n"
+                            message += f"💰 Price: {return_price_text}\n"
+                            message += f"⏱️ Duration: {return_duration_text}, {return_stops}\n"
+                            
+                            # Add return layover info
+                            return_it = return_summary.get("itinerary", {})
+                            return_layovers = return_it.get("layovers", [])
+                            if return_layovers:
+                                return_layover_info = ", ".join([f"{l.get('airport_code', l.get('city', 'Unknown'))} ({l.get('duration', 'Unknown')})" for l in return_layovers])
+                                message += f"🔄 Return layovers: {return_layover_info}\n"
+                            
+                            # Calculate total price
+                            outbound_price = float(price.get('total', 0))
+                            return_price_val = float(return_price.get('total', 0))
+                            total_price = outbound_price + return_price_val
+                            message += f"\n💰 Total round-trip price: {total_price:.2f} {price.get('currency', 'EUR')}"
+                        else:
+                            message += f"\n\n❌ No return flights found for {return_date_str}"
+                            
+                except Exception as e:
+                    print(f"[BulkSearch] Error searching return flights: {e}")
+                    message += f"\n\n❌ Error searching return flights"
+            
+        else:
+            message = f"❌ Bulk search completed but no flights found across {bulk_result.get('total_searches', 0)} dates."
+        
+        # Send the result back to the user
+        print(f"[BulkSearch] About to send response to thread_id: {thread_id}")
+        send_async_response(thread_id, message, user_phone)
+        print(f"[BulkSearch] Completed bulk search for {thread_id}")
+        
+    except Exception as e:
+        error_message = f"❌ Bulk search failed: {str(e)}"
+        send_async_response(thread_id, error_message, user_phone)
+        print(f"[BulkSearch] Background execution error: {e}")
+    finally:
+        # Remove from active searches when done
+        _active_searches.discard(search_key)
+
+
+def send_async_response(thread_id: str, message: str, user_phone: str = None):
+    """
+    Send bulk search results back to user via Twilio WhatsApp.
+    """
+    print(f"[BulkSearch] Sending results to {thread_id}: {message[:100]}...")
+    
+    try:
+        # For bulk search, always try to send via WhatsApp
+        # Convert thread_id to WhatsApp format if it's a phone number
+        whatsapp_number = f"whatsapp:+{thread_id}" if thread_id.isdigit() else None
+        
+        # TEMPORARY: Hardcode the phone number from logs for testing
+        if thread_id == "default" or not whatsapp_number:
+            print(f"[BulkSearch] Using hardcoded phone number for testing (thread_id was: {thread_id})")
+            whatsapp_number = "whatsapp:+447948623631"  # From your logs
+        
+        if whatsapp_number:
+            send_whatsapp_message(whatsapp_number, message)
+        else:
+            print(f"[BulkSearch] Thread ID {thread_id} is not a phone number, cannot send WhatsApp")
+            
+    except Exception as e:
+        print(f"[BulkSearch] Failed to send WhatsApp message: {e}")
+
+
+def send_whatsapp_message(phone_number: str, message: str):
+    """
+    Send a WhatsApp message via Twilio REST API.
+    """
+    print(f"[BulkSearch] Sending WhatsApp to {phone_number}")
+    
+    try:
+        import os
+        from twilio.rest import Client
+        from dotenv import load_dotenv
+        
+        load_dotenv()
+        
+        # Get Twilio credentials from environment
+        account_sid = os.getenv('TWILIO_ACCOUNT_SID')
+        auth_token = os.getenv('TWILIO_AUTH_TOKEN')
+        twilio_whatsapp_number = os.getenv('TWILIO_WHATSAPP_NUMBER', 'whatsapp:+14155238886')
+        
+        if not account_sid or not auth_token:
+            print("[BulkSearch] ERROR: Twilio credentials not found in environment variables")
+            print("[BulkSearch] Please set TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN in your .env file")
+            return
+        
+        # Create Twilio client
+        client = Client(account_sid, auth_token)
+        
+        # Send the WhatsApp message
+        message_obj = client.messages.create(
+            from_=twilio_whatsapp_number,
+            body=message,
+            to=phone_number
+        )
+        
+        print(f"[BulkSearch] ✅ WhatsApp message sent successfully! Message SID: {message_obj.sid}")
+        
+    except Exception as e:
+        print(f"[BulkSearch] ❌ Failed to send WhatsApp message: {e}")
+
+
+def store_pending_message(thread_id: str, message: str):
+    """
+    Store a pending message for the user to receive on their next interaction.
+    """
+    print(f"[BulkSearch] Storing pending message for {thread_id}")
+    
+    # Use a simple in-memory storage for pending messages
+    # In production, you might want to use Redis or a database
+    try:
+        global _pending_messages
+        if '_pending_messages' not in globals():
+            _pending_messages = {}
+        
+        if thread_id not in _pending_messages:
+            _pending_messages[thread_id] = []
+        
+        _pending_messages[thread_id].append({
+            'message': message,
+            'timestamp': time.time()
+        })
+        
+        print(f"[BulkSearch] Stored pending message for {thread_id}")
+        
+    except Exception as e:
+        print(f"[BulkSearch] Failed to store pending message: {e}")
+
+
+# Initialize worker on module import
+start_background_worker()
+
+   
