@@ -46,6 +46,19 @@ async def twilio_whatsapp(
     thread_id = WaId or From or "whatsapp-default"
     
     try:
+        # Check for unsupported media types (images, videos, GIFs, etc.)
+        if MediaUrl0 and MediaContentType0:
+            is_voice_message = MediaContentType0.startswith('audio/')
+            
+            if not is_voice_message:
+                # Reject unsupported media types
+                reply_text = "Sorry, I can only process text messages and voice notes. Please send your message as text or a voice note."
+                twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+                <Response>
+                    <Message>{html.escape(reply_text)}</Message>
+                </Response>"""
+                return Response(content=twiml, media_type="application/xml")
+        
         # Check if this is a voice message
         is_voice_message = (MediaUrl0 and 
                            MediaContentType0 and 
