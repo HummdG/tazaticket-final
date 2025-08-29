@@ -125,6 +125,7 @@ def FlightSearchStateMachine(
     type_of_trip: Optional[str] = None,
     user_input_text: Optional[str] = "",
     thread_id: str = "default",
+    mode_of_conversation: Optional[str] = None,
 ):
     """
     Manages flight search state and performs search when all required fields are complete.
@@ -169,6 +170,10 @@ def FlightSearchStateMachine(
     
     # Get state machine for this thread
     sm = get_or_create_state_machine(thread_id)
+    
+    # Set mode of conversation if provided
+    if mode_of_conversation:
+        sm.set_variable('mode_of_conversation', mode_of_conversation)
     
     # Parse carrier preference from user input
     preferred_carriers = parse_carrier_preference(user_input_text) if user_input_text else DEFAULT_PREFERRED_CARRIERS
@@ -310,6 +315,7 @@ def BulkFlightSearch(
     user_input_text: str = "",
     number_of_passengers: int = 1,
     thread_id: str = "default",
+    mode_of_conversation: Optional[str] = None,
 ):
     """
     Detects and handles bulk flight search requests for date ranges.

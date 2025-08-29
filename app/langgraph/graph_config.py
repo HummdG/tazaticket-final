@@ -37,7 +37,7 @@ class BasicToolNode:
         
         outputs = []
         for tool_call in message.tool_calls:
-            # Pass thread_id and user_input_text to tools that need them
+            # Pass thread_id, user_input_text, and voice mode to tools that need them
             tool_args = tool_call["args"]
             if tool_call["name"] in ["FlightSearchStateMachine", "BulkFlightSearch"]:
                 if "thread_id" not in tool_args:
@@ -45,6 +45,13 @@ class BasicToolNode:
                     extracted_thread_id = inputs.get("configurable", {}).get("thread_id", "default")
                     tool_args["thread_id"] = extracted_thread_id
                     print(f"[BasicToolNode] Setting thread_id for {tool_call['name']}: {extracted_thread_id}")
+                
+                # Set mode of conversation based on voice detection
+                is_voice_mode = inputs.get("configurable", {}).get("is_voice_mode", False)
+                if "mode_of_conversation" not in tool_args:
+                    tool_args["mode_of_conversation"] = "voice" if is_voice_mode else "text"
+                    print(f"[BasicToolNode] Setting mode_of_conversation: {tool_args['mode_of_conversation']}")
+                
                 if tool_call["name"] in ["FlightSearchStateMachine", "BulkFlightSearch"]:
                     if "user_input_text" not in tool_args or not tool_args["user_input_text"]:
                         # Find the original user message for carrier parsing
@@ -138,12 +145,12 @@ def create_graph():
     return graph
 
 
-def invoke_graph(graph, user_message: str, thread_id: str = "default"):
+def invoke_graph(graph, user_message: str, thread_id: str = "default", is_voice: bool = False):
     """
     Convenience function to invoke the graph with a user message.
     Integrates with MemoryManager for persistent chat history.
     """
-    print(f"[GraphConfig] Invoking graph for thread {thread_id} with message: '{user_message[:50]}...'")
+    print(f"[GraphConfig] Invoking graph for thread {thread_id} with message: '{user_message[:50]}...' (voice: {is_voice})")
     
     # Initialize session and load context from DynamoDB
     memory_manager.on_session_start(thread_id)
@@ -165,10 +172,18 @@ def invoke_graph(graph, user_message: str, thread_id: str = "default"):
     
     print(f"[GraphConfig] Converted to {len(langchain_messages)} LangChain messages")
     
+    # Create configuration with voice mode information
+    config = {
+        "configurable": {
+            "thread_id": thread_id,
+            "is_voice_mode": is_voice
+        }
+    }
+    
     # Invoke the graph with the full context
     state = graph.invoke(
         {"messages": langchain_messages},
-        {"configurable": {"thread_id": thread_id}},
+        config,
     )
     
     # Extract assistant response and add to memory manager (closes pair)
