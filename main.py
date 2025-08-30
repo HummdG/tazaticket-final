@@ -74,9 +74,25 @@ async def twilio_whatsapp(
                 <Message>{html.escape(reply_text)}</Message>
             </Response>"""
         else:
-            # Process text message normally
-            state = invoke_graph(graph, Body, thread_id)
+            # Process text message with language detection
+            from app.services.translation_service import translation_service
+            detected_language, english_text = translation_service.detect_and_translate_to_english(Body)
+            
+            if english_text is None:
+                # Translation failed, use original text
+                english_text = Body
+                detected_language = "en"
+            
+            # Process through LangGraph with English text
+            state = invoke_graph(graph, english_text, thread_id, detected_language=detected_language)
             reply_text = extract_last_ai_text(state) or "Got it."
+            
+            # Translate response back to detected language if needed
+            if detected_language != "en":
+                translated_reply = translation_service.translate_from_english(reply_text, detected_language)
+                if translated_reply:
+                    reply_text = translated_reply
+            
             twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
             <Response>
                 <Message>{html.escape(reply_text)}</Message>

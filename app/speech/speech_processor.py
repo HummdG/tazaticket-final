@@ -164,6 +164,7 @@ def process_voice_message_background(media_url: str, thread_id: str, from_number
     Process voice message in background and send result via Twilio
     This function runs in a separate thread.
     """
+    detected_language = "en"  # Default language
     try:
         print(f"[VoiceProcessor] Starting background processing for {thread_id}")
         
@@ -174,20 +175,38 @@ def process_voice_message_background(media_url: str, thread_id: str, from_number
             send_twilio_message(from_number, "Sorry, I couldn't understand the voice message.")
             return
         
-        # Step 2: Process through LangGraph
+        # Step 2: Detect language and translate if needed
+        from app.services.translation_service import translation_service
+        detected_language, english_text = translation_service.detect_and_translate_to_english(transcribed_text)
+        
+        if english_text is None:
+            # Translation failed, use original text
+            english_text = transcribed_text
+            print(f"[VoiceProcessor] Translation failed, using original text")
+        
+        print(f"[VoiceProcessor] Language: {detected_language}, Processing text: '{english_text[:50]}...'")
+        
+        # Step 3: Process through LangGraph with English text
         from app.langgraph import create_graph, invoke_graph, extract_last_ai_text
         graph = create_graph()
-        state = invoke_graph(graph, transcribed_text, thread_id, is_voice=True)
+        state = invoke_graph(graph, english_text, thread_id, is_voice=True, detected_language=detected_language)
         reply_text = extract_last_ai_text(state) or "Got it."
         
-        # Step 3: Convert to speech (minimal local storage)
+        # Step 4: Translate response back to detected language if needed
+        if detected_language != "en":
+            translated_reply = translation_service.translate_from_english(reply_text, detected_language)
+            if translated_reply:
+                reply_text = translated_reply
+                print(f"[VoiceProcessor] Translated response to {detected_language}: '{reply_text[:50]}...'")
+        
+        # Step 5: Convert to speech (minimal local storage)
         audio_file_path = speech_processor.text_to_speech(reply_text)
         if not audio_file_path:
             # Fallback to text if TTS fails
             send_twilio_message(from_number, reply_text)
             return
         
-        # Step 4: Upload to S3
+        # Step 6: Upload to S3
         from app.services.s3_handler import secure_tazaticket_s3
         presigned_url = secure_tazaticket_s3.upload_voice_file(audio_file_path, thread_id)
         
@@ -195,7 +214,7 @@ def process_voice_message_background(media_url: str, thread_id: str, from_number
         if os.path.exists(audio_file_path):
             os.unlink(audio_file_path)
         
-        # Step 5: Send voice response
+        # Step 7: Send voice response
         if presigned_url:
             send_twilio_voice_message(from_number, presigned_url)
         else:

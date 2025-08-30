@@ -126,6 +126,7 @@ def FlightSearchStateMachine(
     user_input_text: Optional[str] = "",
     thread_id: str = "default",
     mode_of_conversation: Optional[str] = None,
+    detected_language: str = "en",
 ):
     """
     Manages flight search state and performs search when all required fields are complete.
@@ -202,10 +203,11 @@ def FlightSearchStateMachine(
             normalized_trip_type = 'round-trip'
         sm.set_variable('type_of_trip', normalized_trip_type)
     
-    # Set defaults if not set
-    if not sm.detected_language:
-        sm.set_variable('detected_language', 'en')
-    if not sm.mode_of_conversation:
+    # Set detected language and mode of conversation
+    sm.set_variable('detected_language', detected_language)
+    if mode_of_conversation:
+        sm.set_variable('mode_of_conversation', mode_of_conversation)
+    elif not sm.mode_of_conversation:
         sm.set_variable('mode_of_conversation', 'text')
     
     # Check if complete and perform search
@@ -316,6 +318,7 @@ def BulkFlightSearch(
     number_of_passengers: int = 1,
     thread_id: str = "default",
     mode_of_conversation: Optional[str] = None,
+    detected_language: str = "en",
 ):
     """
     Detects and handles bulk flight search requests for date ranges.

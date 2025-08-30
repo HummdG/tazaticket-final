@@ -52,6 +52,12 @@ class BasicToolNode:
                     tool_args["mode_of_conversation"] = "voice" if is_voice_mode else "text"
                     print(f"[BasicToolNode] Setting mode_of_conversation: {tool_args['mode_of_conversation']}")
                 
+                # Set detected language
+                detected_language = inputs.get("configurable", {}).get("detected_language", "en")
+                if "detected_language" not in tool_args:
+                    tool_args["detected_language"] = detected_language
+                    print(f"[BasicToolNode] Setting detected_language: {detected_language}")
+                
                 if tool_call["name"] in ["FlightSearchStateMachine", "BulkFlightSearch"]:
                     if "user_input_text" not in tool_args or not tool_args["user_input_text"]:
                         # Find the original user message for carrier parsing
@@ -145,12 +151,12 @@ def create_graph():
     return graph
 
 
-def invoke_graph(graph, user_message: str, thread_id: str = "default", is_voice: bool = False):
+def invoke_graph(graph, user_message: str, thread_id: str = "default", is_voice: bool = False, detected_language: str = "en"):
     """
     Convenience function to invoke the graph with a user message.
     Integrates with MemoryManager for persistent chat history.
     """
-    print(f"[GraphConfig] Invoking graph for thread {thread_id} with message: '{user_message[:50]}...' (voice: {is_voice})")
+    print(f"[GraphConfig] Invoking graph for thread {thread_id} with message: '{user_message[:50]}...' (voice: {is_voice}, language: {detected_language})")
     
     # Initialize session and load context from DynamoDB
     memory_manager.on_session_start(thread_id)
@@ -172,11 +178,12 @@ def invoke_graph(graph, user_message: str, thread_id: str = "default", is_voice:
     
     print(f"[GraphConfig] Converted to {len(langchain_messages)} LangChain messages")
     
-    # Create configuration with voice mode information
+    # Create configuration with voice mode and language information
     config = {
         "configurable": {
             "thread_id": thread_id,
-            "is_voice_mode": is_voice
+            "is_voice_mode": is_voice,
+            "detected_language": detected_language
         }
     }
     
