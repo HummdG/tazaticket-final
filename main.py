@@ -29,7 +29,7 @@ def queue_voice_processing(media_url: str, thread_id: str, from_number: str) -> 
         # Queue the heavy processing for background
         queue_voice_task(process_voice_message_background, media_url, thread_id, from_number)
         
-        return "🎤 Got your voice message! I'm processing it and will respond shortly..."
+        return "🎤 Got your voice message! We're working on it and will respond shortly..."
         
     except Exception as e:
         print(f"❌ Error queueing voice processing: {e}")
