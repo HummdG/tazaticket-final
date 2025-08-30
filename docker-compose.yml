@@ -1,0 +1,52 @@
+version: '3.8'
+
+services:
+  langgraph-app:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      # Application Configuration
+      - PORT=8000
+      
+      # OpenAI Configuration
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      
+      # Travelport Configuration
+      - TRAVELPORT_USERNAME=${TRAVELPORT_USERNAME}
+      - TRAVELPORT_PASSWORD=${TRAVELPORT_PASSWORD}
+      - TRAVELPORT_CLIENT_ID=${TRAVELPORT_CLIENT_ID}
+      - TRAVELPORT_CLIENT_SECRET=${TRAVELPORT_CLIENT_SECRET}
+      - TRAVELPORT_PCC=${TRAVELPORT_PCC}
+      - TRAVELPORT_ACCESS_GROUP=${TRAVELPORT_ACCESS_GROUP}
+      - TRAVELPORT_BASE_URL=${TRAVELPORT_BASE_URL}
+      
+      # Twilio Configuration
+      - TWILIO_ACCOUNT_SID=${TWILIO_ACCOUNT_SID}
+      - TWILIO_AUTH_TOKEN=${TWILIO_AUTH_TOKEN}
+      - TWILIO_WHATSAPP_NUMBER=${TWILIO_WHATSAPP_NUMBER}
+      
+      # AWS Configuration
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=${AWS_REGION:-eu-north-1}
+      - CHAT_HISTORY_TABLE=${CHAT_HISTORY_TABLE:-ChatHistory}
+      - S3_VOICE_BUCKET=${S3_VOICE_BUCKET:-tazaticket}
+      - S3_VOICE_PREFIX=${S3_VOICE_PREFIX:-voices/}
+      - S3_PRESIGNED_TTL=${S3_PRESIGNED_TTL:-3600}
+      
+      # Memory Manager Configuration
+      - SESSION_IDLE_SECONDS=${SESSION_IDLE_SECONDS:-21600}
+      - CONTEXT_PAIRS=${CONTEXT_PAIRS:-12}
+      - BATCH_PAIRS=${BATCH_PAIRS:-1}
+      - MAX_RAM_PAIRS=${MAX_RAM_PAIRS:-13}
+      
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    env_file:
+      - .env 
