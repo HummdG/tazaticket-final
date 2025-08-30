@@ -17,6 +17,13 @@ from langchain_core.messages import ToolMessage, HumanMessage, AIMessage
 from ..tools.FlightSearchStateMachine import FlightSearchStateMachine, BulkFlightSearch
 from .memory_manager import memory_manager
 
+# Global variable to store current thread_id for tools
+_current_thread_id = "default"
+
+def get_current_thread_id():
+    """Get the current thread_id for use in tools"""
+    return _current_thread_id
+
 
 class State(TypedDict):
     """State definition for the LangGraph conversation flow"""
@@ -40,12 +47,14 @@ class BasicToolNode:
             # Pass thread_id, user_input_text, and voice mode to tools that need them
             tool_args = tool_call["args"]
             if tool_call["name"] in ["FlightSearchStateMachine", "BulkFlightSearch"]:
-                # Always override thread_id to ensure correct value from config
-                extracted_thread_id = inputs.get("configurable", {}).get("thread_id", "default")
+                # Try to get thread_id from config first, then fallback to global variable
+                config_thread_id = inputs.get("configurable", {}).get("thread_id")
+                global _current_thread_id
+                extracted_thread_id = config_thread_id if config_thread_id else _current_thread_id
                 existing_thread_id = tool_args.get("thread_id", "not_set")
                 tool_args["thread_id"] = extracted_thread_id
                 print(f"[BasicToolNode] Setting thread_id for {tool_call['name']}: {extracted_thread_id} (was: {existing_thread_id})")
-                print(f"[BasicToolNode] Configurable context: {inputs.get('configurable', {})}")
+                print(f"[BasicToolNode] Source: {'config' if config_thread_id else 'global'}, Config: {inputs.get('configurable', {})}")
                 
                 # Set mode of conversation based on voice detection
                 is_voice_mode = inputs.get("configurable", {}).get("is_voice_mode", False)
@@ -157,7 +166,10 @@ def invoke_graph(graph, user_message: str, thread_id: str = "default", is_voice:
     Convenience function to invoke the graph with a user message.
     Integrates with MemoryManager for persistent chat history.
     """
+    global _current_thread_id
+    _current_thread_id = thread_id
     print(f"[GraphConfig] Invoking graph for thread {thread_id} with message: '{user_message[:50]}...' (voice: {is_voice}, language: {detected_language})")
+    print(f"[GraphConfig] Set global thread_id to: {_current_thread_id}")
     
     # Initialize session and load context from DynamoDB
     memory_manager.on_session_start(thread_id)
@@ -187,6 +199,9 @@ def invoke_graph(graph, user_message: str, thread_id: str = "default", is_voice:
             "detected_language": detected_language
         }
     }
+    
+    print(f"[GraphConfig] Creating config with thread_id: {thread_id}")
+    print(f"[GraphConfig] Full config: {config}")
     
     # Invoke the graph with the full context
     state = graph.invoke(
