@@ -1200,19 +1200,34 @@ def send_async_response(thread_id: str, message: str, user_phone: str = None):
     print(f"[BulkSearch] Sending results to {thread_id}: {message[:100]}...")
     
     try:
-        # For bulk search, always try to send via WhatsApp
-        # Convert thread_id to WhatsApp format if it's a phone number
-        whatsapp_number = f"whatsapp:+{thread_id}" if thread_id.isdigit() else None
+        # Extract WhatsApp phone number from thread_id
+        whatsapp_number = None
         
-        # TEMPORARY: Hardcode the phone number from logs for testing
-        if thread_id == "default" or not whatsapp_number:
-            print(f"[BulkSearch] Using hardcoded phone number for testing (thread_id was: {thread_id})")
-            whatsapp_number = "whatsapp:+447948623631"  # From your logs
+        # thread_id can be:
+        # 1. Pure digits (phone number without country code): e.g. "447948623631"
+        # 2. WhatsApp ID format: e.g. "whatsapp:+447948623631"  
+        # 3. Phone number with + prefix: e.g. "+447948623631"
+        
+        if thread_id.startswith("whatsapp:"):
+            # Already in WhatsApp format
+            whatsapp_number = thread_id
+            print(f"[BulkSearch] Thread ID is already WhatsApp format: {whatsapp_number}")
+        elif thread_id.startswith("+"):
+            # Phone number with + prefix
+            whatsapp_number = f"whatsapp:{thread_id}"
+            print(f"[BulkSearch] Converted phone number to WhatsApp format: {whatsapp_number}")
+        elif thread_id.isdigit():
+            # Pure digits - assume it's a phone number and add + prefix
+            whatsapp_number = f"whatsapp:+{thread_id}"
+            print(f"[BulkSearch] Converted digit string to WhatsApp format: {whatsapp_number}")
+        else:
+            print(f"[BulkSearch] Thread ID '{thread_id}' is not a valid phone number format, cannot send WhatsApp")
+            return
         
         if whatsapp_number:
             send_whatsapp_message(whatsapp_number, message)
         else:
-            print(f"[BulkSearch] Thread ID {thread_id} is not a phone number, cannot send WhatsApp")
+            print(f"[BulkSearch] Could not extract valid phone number from thread_id: {thread_id}")
             
     except Exception as e:
         print(f"[BulkSearch] Failed to send WhatsApp message: {e}")
