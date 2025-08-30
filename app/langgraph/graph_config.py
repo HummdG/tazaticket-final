@@ -40,11 +40,12 @@ class BasicToolNode:
             # Pass thread_id, user_input_text, and voice mode to tools that need them
             tool_args = tool_call["args"]
             if tool_call["name"] in ["FlightSearchStateMachine", "BulkFlightSearch"]:
-                if "thread_id" not in tool_args:
-                    # Extract thread_id from the graph state if available
-                    extracted_thread_id = inputs.get("configurable", {}).get("thread_id", "default")
-                    tool_args["thread_id"] = extracted_thread_id
-                    print(f"[BasicToolNode] Setting thread_id for {tool_call['name']}: {extracted_thread_id}")
+                # Always override thread_id to ensure correct value from config
+                extracted_thread_id = inputs.get("configurable", {}).get("thread_id", "default")
+                existing_thread_id = tool_args.get("thread_id", "not_set")
+                tool_args["thread_id"] = extracted_thread_id
+                print(f"[BasicToolNode] Setting thread_id for {tool_call['name']}: {extracted_thread_id} (was: {existing_thread_id})")
+                print(f"[BasicToolNode] Configurable context: {inputs.get('configurable', {})}")
                 
                 # Set mode of conversation based on voice detection
                 is_voice_mode = inputs.get("configurable", {}).get("is_voice_mode", False)
