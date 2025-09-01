@@ -1,9 +1,11 @@
 """
-Speech processing module using AssemblyAI (STT) and OpenAI TTS
+Speech processing module using AssemblyAI (STT) and SpeechGen TTS
 """
 import os
 import tempfile
-from typing import Optional, Callable, Tuple
+import urllib.parse
+import time
+from typing import Optional, Callable, Tuple, Dict, Any
 import requests
 import assemblyai as aai
 from openai import OpenAI
@@ -15,8 +17,75 @@ _voice_task_queue = queue.Queue()
 _voice_worker_thread = None
 _voice_worker_running = False
 
+# SpeechGen.io TTS Client
+class SpeechGenClient:
+    """Minimal SpeechGen.io TTS client for voice synthesis"""
+    
+    def __init__(self, token: str, email: str = "hummd2001@gmail.com"):
+        if not token:
+            raise ValueError("Missing SPEECHGEN_API_KEY environment variable")
+        self.token = token
+        self.email = email
+        self.base_url = "https://speechgen.io/"
+        self._session = requests.Session()
+    
+    def get_voices(self, langs: Optional[list] = None) -> Dict[str, Any]:
+        """Get available voices, optionally filtered by languages"""
+        url = urllib.parse.urljoin(self.base_url, "index.php?r=api/voices")
+        params = {}
+        if langs:
+            params["langs"] = ",".join(langs)
+        resp = self._session.get(url, params=params, timeout=30)
+        resp.raise_for_status()
+        return resp.json()
+    
+    def tts_quick(self, voice: str, text: str, output_path: str) -> str:
+        """Generate TTS audio file using quick API (<=2000 chars)"""
+        if len(text) > 2000:
+            raise ValueError("Text too long for quick TTS (max 2000 chars)")
+        
+        url = urllib.parse.urljoin(self.base_url, "index.php?r=api/text")
+        payload = {
+            "token": self.token,
+            "email": self.email,
+            "voice": voice,
+            "text": text,
+            "format": "mp3",
+            "speed": 1.0,
+            "pitch": 0,
+            "emotion": "good",
+        }
+        
+        # Submit TTS request
+        resp = self._session.post(url, data=payload, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        
+        status = int(data.get("status", -1))
+        if status == -1:
+            raise RuntimeError(f"SpeechGen TTS failed: {data.get('error', 'unknown error')}")
+        
+        # Get file URL and download
+        file_url = data.get("file") or data.get("file_cors")
+        if not file_url:
+            raise RuntimeError("No file URL returned from SpeechGen")
+        
+        # Download the audio file
+        if not file_url.startswith("http"):
+            file_url = urllib.parse.urljoin(self.base_url, file_url.lstrip("/"))
+        
+        with self._session.get(file_url, timeout=30) as r:
+            r.raise_for_status()
+            os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+            with open(output_path, "wb") as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+        
+        return output_path
+
 class SpeechProcessor:
-    """Handles speech-to-text using AssemblyAI and text-to-speech operations using OpenAI"""
+    """Handles speech-to-text using AssemblyAI and text-to-speech operations using SpeechGen"""
     
     def __init__(self):
         # Initialize AssemblyAI for STT
@@ -24,10 +93,121 @@ class SpeechProcessor:
         if not os.getenv('ASSEMBLYAI_API_KEY'):
             print("⚠️ Warning: ASSEMBLYAI_API_KEY not found in environment variables")
         
-        # Initialize OpenAI for TTS
-        self.client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
-        if not os.getenv('OPENAI_API_KEY'):
-            print("⚠️ Warning: OPENAI_API_KEY not found in environment variables")
+        # Initialize SpeechGen for TTS
+        speechgen_key = os.getenv('SPEECHGEN_API_KEY')
+        if speechgen_key:
+            self.speechgen_client = SpeechGenClient(speechgen_key)
+            print("✅ SpeechGen TTS initialized")
+        else:
+            print("⚠️ Warning: SPEECHGEN_API_KEY not found in environment variables")
+            self.speechgen_client = None
+    
+    def _get_voice_for_language(self, detected_language: str, fallback_voice: str = "John") -> str:
+        """Select appropriate voice based on detected language"""
+        if not self.speechgen_client:
+            return fallback_voice
+        
+        try:
+            # Map common language codes to SpeechGen format
+            lang_map = {
+                # --- English & variants ---
+                "en": "en", "en_us": "en", "en_gb": "en", "en_uk": "en", "en_au": "en", "en_ca": "en",
+                "en_in": "en", "en_ie": "en", "en_nz": "en", "en_ph": "en", "en_za": "en",
+
+                # --- Romance languages ---
+                "es": "es", "es_419": "es", "es_mx": "es", "es_es": "es", "es_ar": "es",
+                "es_co": "es", "es_cl": "es", "es_pe": "es", "es_ve": "es", "es_uy": "es", "es_bo": "es",
+
+                "pt": "pt", "pt_br": "pt", "pt_pt": "pt", "pt_mz": "pt",
+
+                "fr": "fr", "fr_fr": "fr", "fr_ca": "fr", "fr_be": "fr", "fr_ch": "fr",
+
+                "it": "it", "ro": "ro", "ro_ro": "ro",
+
+                "ca": "ca", "gl": "gl",
+
+                # --- Germanic languages ---
+                "de": "de", "de_de": "de", "de_at": "de", "de_ch": "de",
+                "nl": "nl", "nl_nl": "nl", "nl_be": "nl",
+                "sv": "sv", "sv_se": "sv",
+                "da": "da", "no": "no", "nb": "no", "nn": "no",
+                "is": "is",
+
+                # --- Slavic & Baltic ---
+                "pl": "pl", "cs": "cs", "sk": "sk", "sl": "sl",
+                "hr": "hr", "sr": "sr", "sr_rs": "sr", "sr_latn": "sr", "sr_cyrl": "sr",
+                "bs": "bs", "bg": "bg", "mk": "mk",
+                "ru": "ru", "ru_ru": "ru", "uk": "uk", "be": "be",
+                "lv": "lv", "lt": "lt", "et": "et",
+
+                # --- Greek, Turkish, Caucasus, Central Asia ---
+                "el": "el", "el_gr": "el",
+                "tr": "tr", "hy": "hy", "ka": "ka",
+                "az": "az", "kk": "kk", "ky": "ky", "uz": "uz", "tk": "tk",
+
+                # --- Semitic & Iranian ---
+                "he": "he", "iw": "he",  # legacy 'iw' -> Hebrew
+                "ar": "ar", "ar_eg": "ar", "ar_sa": "ar", "ar_ae": "ar", "ar_ma": "ar",
+                "ar_lb": "ar", "ar_sy": "ar", "ar_iq": "ar", "ar_dz": "ar", "ar_jo": "ar",
+                "ar_kw": "ar", "ar_om": "ar", "ar_qa": "ar", "ar_bh": "ar", "ar_ye": "ar",
+                "ar_ly": "ar", "ar_tn": "ar", "ar_ps": "ar", "ar_sd": "ar",
+
+                "fa": "fa", "fa_ir": "fa", "fa_af": "fa", "prs": "fa",  # Dari -> fa
+                "kur": "ku", "ku": "ku", "ckb": "ku",  # Sorani -> Kurdish generic
+                "ps": "ps",  # Pashto
+
+                # --- South Asian (India, Pakistan, etc.) ---
+                "hi": "hi", "hi_in": "hi",
+                "bn": "bn", "bn_bd": "bn", "bn_in": "bn",
+                "gu": "gu", "gu_in": "gu",
+                "pa": "pa", "pa_in": "pa", "pa_pk": "pa", "pa_guru": "pa", "pa_arab": "pa",
+                "mr": "mr", "ne": "ne", "si": "si",
+                "ta": "ta", "ta_in": "ta", "ta_lk": "ta",
+                "te": "te", "kn": "kn", "ml": "ml",
+                "as": "as", "or": "or", "sa": "sa",
+                "ur": "ur", "ur_pk": "ur", "ur_in": "ur",
+
+                # --- SE Asia ---
+                "th": "th", "lo": "lo", "km": "km", "my": "my", "vi": "vi",
+                "id": "id", "ms": "ms", "jv": "jv", "su": "su",
+                "tl": "tl", "fil": "tl",
+
+                # --- East Asia ---
+                "zh": "zh", "zh_cn": "zh", "zh_sg": "zh", "zh_tw": "zh", "zh_hk": "zh",
+                "zh_hans": "zh", "zh_hant": "zh", "cmn": "zh", "yue": "zh",  # Mandarin/Cantonese -> zh
+                "ja": "ja", "ko": "ko", "mn": "mn",
+
+                # --- Africa (commonly encountered) ---
+                "am": "am", "ti": "ti", "so": "so",
+                "sw": "sw", "sw_ke": "sw", "sw_tz": "sw",
+                "ha": "ha", "ig": "ig", "yo": "yo",
+                "zu": "zu", "xh": "xh", "st": "st", "tn": "tn", "ts": "ts",
+                "rw": "rw", "mg": "mg", "af": "af",
+
+                # --- Others / constructed / regional ---
+                "sq": "sq", "eo": "eo", "eu": "eu", "ga": "ga", "mt": "mt", "cy": "cy",
+                "glg": "gl", "cat": "ca", "la": "la", "bo": "bo", "ug": "ug",
+            }
+            
+            lang = lang_map.get(detected_language, 'en')
+            print(f"🗣️ Getting voices for language: {lang}")
+            
+            data = self.speechgen_client.get_voices(langs=[lang])
+            voices = data.get("voices", data)  # API may return either structure
+            
+            if voices and len(voices) > 0:
+                # Get the first available voice for the language
+                v = voices[0]
+                voice_name = v.get("title") or v.get("name") or v.get("voice") or fallback_voice
+                print(f"🗣️ Selected voice: {voice_name} for language: {lang}")
+                return voice_name
+            else:
+                print(f"⚠️ No voices found for language {lang}, using fallback: {fallback_voice}")
+                return fallback_voice
+                
+        except Exception as e:
+            print(f"⚠️ Error selecting voice for language {detected_language}: {e}")
+            return fallback_voice
     
     def speech_to_text_direct(self, audio_url: str) -> Tuple[Optional[str], Optional[str]]:
         """
@@ -81,35 +261,37 @@ class SpeechProcessor:
             print(f"❌ STT error: {e}")
             return None, None
     
-    def text_to_speech(self, text: str, voice: str = "alloy") -> Optional[str]:
+    def text_to_speech(self, text: str, detected_language: str = "en") -> Optional[str]:
         """
-        Convert text to speech using OpenAI TTS
+        Convert text to speech using SpeechGen TTS with automatic voice selection
         
         Args:
             text: Text to convert to speech
-            voice: Voice to use (alloy, echo, fable, onyx, nova, shimmer)
+            detected_language: Language code to select appropriate voice
             
         Returns:
             Path to the generated audio file or None if error
         """
+        if not self.speechgen_client:
+            print("❌ SpeechGen client not configured")
+            return None
+            
         try:
-            # Generate speech
-            response = self.client.audio.speech.create(
-                model="tts-1",
-                voice=voice,
-                input=text
-            )
+            # Select appropriate voice for the detected language
+            voice = self._get_voice_for_language(detected_language)
             
             # Create temporary file for the audio
             temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.mp3')
-            temp_file.write(response.content)
             temp_file.close()
             
-            print(f"🔊 TTS successful: {text[:50]}...")
-            return temp_file.name
+            # Generate speech using SpeechGen
+            output_path = self.speechgen_client.tts_quick(voice, text, temp_file.name)
+            
+            print(f"🔊 SpeechGen TTS successful: {text[:50]}... (voice: {voice})")
+            return output_path
             
         except Exception as e:
-            print(f"❌ TTS error: {e}")
+            print(f"❌ SpeechGen TTS error: {e}")
             return None
     
     def is_configured(self) -> bool:
@@ -203,7 +385,7 @@ def process_voice_message_background(media_url: str, thread_id: str, from_number
                 print(f"[VoiceProcessor] Translated response to {detected_language}: '{reply_text[:50]}...'")
         
         # Step 5: Convert to speech (minimal local storage)
-        audio_file_path = speech_processor.text_to_speech(reply_text)
+        audio_file_path = speech_processor.text_to_speech(reply_text, detected_language)
         if not audio_file_path:
             # Fallback to text if TTS fails
             send_twilio_message(from_number, reply_text)
