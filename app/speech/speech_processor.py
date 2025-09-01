@@ -1,10 +1,11 @@
 """
-Speech processing module using OpenAI's Whisper (STT) and TTS
+Speech processing module using AssemblyAI (STT) and OpenAI TTS
 """
 import os
 import tempfile
-from typing import Optional, Callable
+from typing import Optional, Callable, Tuple
 import requests
+import assemblyai as aai
 from openai import OpenAI
 import queue
 import threading
@@ -15,70 +16,51 @@ _voice_worker_thread = None
 _voice_worker_running = False
 
 class SpeechProcessor:
-    """Handles speech-to-text and text-to-speech operations using OpenAI"""
+    """Handles speech-to-text using AssemblyAI and text-to-speech operations using OpenAI"""
     
     def __init__(self):
+        # Initialize AssemblyAI for STT
+        aai.settings.api_key = os.getenv('ASSEMBLYAI_API_KEY')
+        if not os.getenv('ASSEMBLYAI_API_KEY'):
+            print("⚠️ Warning: ASSEMBLYAI_API_KEY not found in environment variables")
+        
+        # Initialize OpenAI for TTS
         self.client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
         if not os.getenv('OPENAI_API_KEY'):
             print("⚠️ Warning: OPENAI_API_KEY not found in environment variables")
     
-    def speech_to_text_direct(self, audio_url: str) -> Optional[str]:
+    def speech_to_text_direct(self, audio_url: str) -> Tuple[Optional[str], Optional[str]]:
         """
-        Convert speech to text using OpenAI Whisper (direct upload without local storage)
+        Convert speech to text using AssemblyAI with language detection
         
         Args:
             audio_url: URL of the audio file to transcribe (supports Twilio authenticated URLs)
             
         Returns:
-            Transcribed text or None if error
+            Tuple of (transcribed_text, detected_language_code) or (None, None) if error
         """
         try:
-            # For Twilio URLs, we need to authenticate with Account SID and Auth Token
-            if "twilio.com" in audio_url:
-                # Get Twilio credentials from environment
-                account_sid = os.getenv('TWILIO_ACCOUNT_SID')
-                auth_token = os.getenv('TWILIO_AUTH_TOKEN')
+            print(f"🎤 Transcribing audio with AssemblyAI and language detection...")
+            
+            # Configure AssemblyAI transcription with language detection
+            config = aai.TranscriptionConfig(language_detection=True)
+            transcript = aai.Transcriber(config=config).transcribe(audio_url)
+            
+            if transcript.status == "error":
+                print(f"❌ AssemblyAI transcription failed: {transcript.error}")
+                return None, None
+            
+            transcribed_text = transcript.text
+            detected_language = transcript.json_response.get("language_code", "en")
+            
+            print(f"🎤 STT successful: {transcribed_text[:50]}...")
+            print(f"🌍 Detected language: {detected_language}")
+            
+            return transcribed_text, detected_language
                 
-                if not account_sid or not auth_token:
-                    print("❌ Twilio credentials not found in environment variables")
-                    return None
-                
-                print(f"🔐 Streaming Twilio audio for transcription...")
-                # Stream download with Basic Auth for Twilio
-                response = requests.get(
-                    audio_url, 
-                    auth=(account_sid, auth_token),
-                    timeout=30,
-                    stream=True
-                )
-            else:
-                # Stream download without auth for non-Twilio URLs
-                response = requests.get(audio_url, timeout=30, stream=True)
-            
-            response.raise_for_status()
-            
-            print(f"🎤 Transcribing audio directly from stream...")
-            
-            # Transcribe directly from response content without saving to disk
-            import io
-            audio_file = io.BytesIO(response.content)
-            audio_file.name = "audio.ogg"  # OpenAI needs a filename
-            
-            transcript = self.client.audio.transcriptions.create(
-                model="whisper-1",
-                file=audio_file,
-                response_format="text"
-            )
-            
-            print(f"🎤 STT successful: {transcript[:50]}...")
-            return transcript
-                
-        except requests.RequestException as e:
-            print(f"❌ Error downloading audio: {e}")
-            return None
         except Exception as e:
             print(f"❌ STT error: {e}")
-            return None
+            return None, None
     
     def text_to_speech(self, text: str, voice: str = "alloy") -> Optional[str]:
         """
@@ -164,25 +146,26 @@ def process_voice_message_background(media_url: str, thread_id: str, from_number
     Process voice message in background and send result via Twilio
     This function runs in a separate thread.
     """
-    detected_language = "en"  # Default language
     try:
         print(f"[VoiceProcessor] Starting background processing for {thread_id}")
         
-        # Step 1: Convert voice to text
-        transcribed_text = speech_processor.speech_to_text_direct(media_url)
+        # Step 1: Convert voice to text with language detection using AssemblyAI
+        transcribed_text, detected_language = speech_processor.speech_to_text_direct(media_url)
         
         if not transcribed_text:
             send_twilio_message(from_number, "Sorry, I couldn't understand the voice message.")
             return
         
-        # Step 2: Detect language and translate if needed
-        from app.services.translation_service import translation_service
-        detected_language, english_text = translation_service.detect_and_translate_to_english(transcribed_text)
-        
-        if english_text is None:
-            # Translation failed, use original text
-            english_text = transcribed_text
-            print(f"[VoiceProcessor] Translation failed, using original text")
+        # Step 2: Translate to English if needed (detected_language already from AssemblyAI)
+        english_text = transcribed_text
+        if detected_language != "en":
+            from app.services.translation_service import translation_service
+            _, translated_text = translation_service.detect_and_translate_to_english(transcribed_text)
+            if translated_text:
+                english_text = translated_text
+                print(f"[VoiceProcessor] Translated to English: '{english_text[:50]}...'")
+            else:
+                print(f"[VoiceProcessor] Translation failed, using original text")
         
         print(f"[VoiceProcessor] Language: {detected_language}, Processing text: '{english_text[:50]}...'")
         
@@ -194,6 +177,7 @@ def process_voice_message_background(media_url: str, thread_id: str, from_number
         
         # Step 4: Translate response back to detected language if needed
         if detected_language != "en":
+            from app.services.translation_service import translation_service
             translated_reply = translation_service.translate_from_english(reply_text, detected_language)
             if translated_reply:
                 reply_text = translated_reply
