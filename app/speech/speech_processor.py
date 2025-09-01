@@ -192,13 +192,31 @@ class SpeechProcessor:
             lang = lang_map.get(detected_language, 'en')
             print(f"🗣️ Getting voices for language: {lang}")
             
+            # Special handling for Urdu - always use Uzma
+            if lang == 'ur':
+                print(f"🗣️ Selected voice: Uzma for language: {lang} (hardcoded)")
+                return "Uzma"
+            
             data = self.speechgen_client.get_voices(langs=[lang])
-            voices = data.get("voices", data)  # API may return either structure
+            
+            # Handle different response structures
+            voices = []
+            if isinstance(data, dict):
+                # Check if it's the nested structure like {"Urdu (Pakistan)": [...]}
+                for key, value in data.items():
+                    if isinstance(value, list):
+                        voices.extend(value)
+                
+                # If no nested structure found, try the direct structure
+                if not voices:
+                    voices = data.get("voices", [])
+            elif isinstance(data, list):
+                voices = data
             
             if voices and len(voices) > 0:
                 # Get the first available voice for the language
                 v = voices[0]
-                voice_name = v.get("title") or v.get("name") or v.get("voice") or fallback_voice
+                voice_name = v.get("voice") or v.get("title") or v.get("name") or fallback_voice
                 print(f"🗣️ Selected voice: {voice_name} for language: {lang}")
                 return voice_name
             else:
