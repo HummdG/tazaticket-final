@@ -42,9 +42,28 @@ class SpeechProcessor:
         try:
             print(f"🎤 Transcribing audio with AssemblyAI and language detection...")
             
+            # Check if this is a Twilio URL that needs S3 proxy
+            transcription_url = audio_url
+            if "twilio.com" in audio_url:
+                print(f"🔗 Detected Twilio URL, using S3 proxy...")
+                from app.services.s3_handler import secure_tazaticket_s3
+                
+                # Extract user ID from audio URL (use a simple hash if not available)
+                import hashlib
+                user_id = hashlib.md5(audio_url.encode()).hexdigest()[:8]
+                
+                # Upload to S3 and get public URL
+                public_url = secure_tazaticket_s3.upload_from_twilio_url(audio_url, user_id)
+                if not public_url:
+                    print(f"❌ Failed to upload Twilio media to S3")
+                    return None, None
+                
+                transcription_url = public_url
+                print(f"✅ Using S3 public URL for AssemblyAI: {transcription_url[:50]}...")
+            
             # Configure AssemblyAI transcription with language detection
             config = aai.TranscriptionConfig(language_detection=True)
-            transcript = aai.Transcriber(config=config).transcribe(audio_url)
+            transcript = aai.Transcriber(config=config).transcribe(transcription_url)
             
             if transcript.status == "error":
                 print(f"❌ AssemblyAI transcription failed: {transcript.error}")

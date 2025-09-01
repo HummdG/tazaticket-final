@@ -39,6 +39,74 @@ class SecureTazaTicketS3Handler:
         if self.s3_client is None:
             raise RuntimeError("❌ S3 client is not initialized. Check your AWS credentials and configuration.")
     
+    def upload_from_twilio_url(self, media_url: str, user_id: str) -> Optional[str]:
+        """Download from Twilio authenticated URL and upload to S3 with public access for AssemblyAI"""
+        if not self.is_configured():
+            print("❌ Secure S3 not configured or client not initialized")
+            return None
+            
+        try:
+            import requests
+            import tempfile
+            
+            # Get Twilio credentials from environment
+            account_sid = os.getenv('TWILIO_ACCOUNT_SID')
+            auth_token = os.getenv('TWILIO_AUTH_TOKEN')
+            
+            if not account_sid or not auth_token:
+                print("❌ Twilio credentials not found in environment variables")
+                return None
+            
+            print(f"🔐 Downloading Twilio media for S3 upload...")
+            
+            # Download from Twilio with authentication
+            response = requests.get(
+                media_url, 
+                auth=(account_sid, auth_token),
+                timeout=30,
+                stream=True
+            )
+            response.raise_for_status()
+            
+            # Generate unique filename
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            file_hash = hashlib.md5(media_url.encode()).hexdigest()[:8]
+            filename = f"assemblyai-temp/{user_id}/{timestamp}_{file_hash}.ogg"
+            
+            print(f"📤 Uploading to S3 with public access: {filename}")
+            
+            # Upload directly from stream to S3 with public read access
+            self.s3_client.upload_fileobj(
+                response.raw,
+                self.bucket_name,
+                filename,
+                ExtraArgs={
+                    'ContentType': 'audio/ogg',
+                    'CacheControl': 'max-age=3600',
+                    'ACL': 'public-read',  # Make publicly accessible for AssemblyAI
+                    'Metadata': {
+                        'user-id': user_id,
+                        'created-at': datetime.now().isoformat(),
+                        'service': 'tazaticket-assemblyai',
+                        'type': 'voice-input',
+                        'source': 'twilio'
+                    }
+                }
+            )
+            
+            # Generate public URL
+            public_url = f"https://{self.bucket_name}.s3.{self.region}.amazonaws.com/{filename}"
+            print(f"✅ Public URL created for AssemblyAI: {public_url[:50]}...")
+            
+            # Set tags for cleanup (shorter expiry for temp files)
+            self._set_cleanup_tags_temp(filename)
+            
+            return public_url
+            
+        except Exception as e:
+            print(f"❌ Error uploading from Twilio URL: {e}")
+            return None
+
     def upload_voice_file(self, local_file_path: str, user_id: str) -> Optional[str]:
         """Upload voice file and return secure presigned URL"""
         if not self.is_configured():
@@ -116,6 +184,27 @@ class SecureTazaTicketS3Handler:
                         {'Key': 'Type', 'Value': 'VoiceMessage'},
                         {'Key': 'AutoDelete', 'Value': 'true'},
                         {'Key': 'ExpiryDate', 'Value': (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')}
+                    ]
+                }
+            )
+        except RuntimeError as e:
+            print(str(e))
+        except Exception as e:
+            print(f"⚠️ Could not set cleanup tags: {e}")
+
+    def _set_cleanup_tags_temp(self, filename: str):
+        """Set tags for automatic cleanup of temporary files (shorter expiry)"""
+        try:
+            self._require_client()
+            self.s3_client.put_object_tagging(
+                Bucket=self.bucket_name,
+                Key=filename,
+                Tagging={
+                    'TagSet': [
+                        {'Key': 'Service', 'Value': 'TazaTicket'},
+                        {'Key': 'Type', 'Value': 'TempVoiceInput'},
+                        {'Key': 'AutoDelete', 'Value': 'true'},
+                        {'Key': 'ExpiryDate', 'Value': (datetime.now() + timedelta(hours=6)).strftime('%Y-%m-%d')}  # 6 hours for temp files
                     ]
                 }
             )
