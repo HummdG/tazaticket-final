@@ -59,7 +59,7 @@ class SpeechProcessor:
                     return None, None
                 
                 transcription_url = public_url
-                print(f"✅ Using S3 public URL for AssemblyAI: {transcription_url[:50]}...")
+                print(f"✅ Using S3 presigned URL for AssemblyAI: {transcription_url[:50]}...")
             
             # Configure AssemblyAI transcription with language detection
             config = aai.TranscriptionConfig(language_detection=True)

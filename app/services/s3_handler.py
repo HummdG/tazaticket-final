@@ -73,9 +73,9 @@ class SecureTazaTicketS3Handler:
             file_hash = hashlib.md5(media_url.encode()).hexdigest()[:8]
             filename = f"assemblyai-temp/{user_id}/{timestamp}_{file_hash}.ogg"
             
-            print(f"📤 Uploading to S3 with public access: {filename}")
+            print(f"📤 Uploading to S3: {filename}")
             
-            # Upload directly from stream to S3 with public read access
+            # Upload directly from stream to S3 (without ACL)
             self.s3_client.upload_fileobj(
                 response.raw,
                 self.bucket_name,
@@ -83,7 +83,6 @@ class SecureTazaTicketS3Handler:
                 ExtraArgs={
                     'ContentType': 'audio/ogg',
                     'CacheControl': 'max-age=3600',
-                    'ACL': 'public-read',  # Make publicly accessible for AssemblyAI
                     'Metadata': {
                         'user-id': user_id,
                         'created-at': datetime.now().isoformat(),
@@ -94,9 +93,13 @@ class SecureTazaTicketS3Handler:
                 }
             )
             
-            # Generate public URL
-            public_url = f"https://{self.bucket_name}.s3.{self.region}.amazonaws.com/{filename}"
-            print(f"✅ Public URL created for AssemblyAI: {public_url[:50]}...")
+            # Generate presigned URL for public access (longer expiry for AssemblyAI processing)
+            public_url = self.s3_client.generate_presigned_url(
+                'get_object',
+                Params={'Bucket': self.bucket_name, 'Key': filename},
+                ExpiresIn=3600  # 1 hour should be enough for AssemblyAI to process
+            )
+            print(f"✅ Presigned URL created for AssemblyAI: {public_url[:50]}...")
             
             # Set tags for cleanup (shorter expiry for temp files)
             self._set_cleanup_tags_temp(filename)
