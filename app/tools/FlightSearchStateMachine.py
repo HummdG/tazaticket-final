@@ -401,7 +401,8 @@ Without return duration specified, I'll search for one-way tickets only."""
                 trip_type=trip_type,
                 thread_id=thread_id,
                 user_phone=None,  # Not needed, we'll use thread_id directly
-                original_user_input=user_input_text
+                original_user_input=user_input_text,
+                detected_language=detected_language
             )
             
             # Return immediate acknowledgment
@@ -413,6 +414,16 @@ Without return duration specified, I'll search for one-way tickets only."""
             
             if return_duration:
                 response += f"\n\n🔄 I'll also calculate return flights {return_duration} days later."
+            
+            # Translate response if user language is not English
+            if detected_language != "en":
+                try:
+                    from ..services.translation_service import translation_service
+                    translated_response = translation_service.translate_from_english(response, detected_language)
+                    if translated_response:
+                        response = translated_response
+                except Exception as e:
+                    print(f"[BulkFlightSearch] Translation failed: {e}")
             
             return response
         
@@ -430,11 +441,31 @@ Without return duration specified, I'll search for one-way tickets only."""
             )
             
             if not bulk_result.get("ok"):
-                return f"Bulk search failed: {bulk_result.get('error', 'Unknown error')}"
+                error_msg = f"Bulk search failed: {bulk_result.get('error', 'Unknown error')}"
+                # Translate error message if needed
+                if detected_language != "en":
+                    try:
+                        from ..services.translation_service import translation_service
+                        translated_error = translation_service.translate_from_english(error_msg, detected_language)
+                        if translated_error:
+                            error_msg = translated_error
+                    except Exception as e:
+                        print(f"[BulkFlightSearch] Translation failed: {e}")
+                return error_msg
             
             cheapest = bulk_result.get("cheapest_result")
             if not cheapest:
-                return f"No flights found across {bulk_result.get('total_searches', 0)} dates searched."
+                error_msg = f"No flights found across {bulk_result.get('total_searches', 0)} dates searched."
+                # Translate error message if needed
+                if detected_language != "en":
+                    try:
+                        from ..services.translation_service import translation_service
+                        translated_error = translation_service.translate_from_english(error_msg, detected_language)
+                        if translated_error:
+                            error_msg = translated_error
+                    except Exception as e:
+                        print(f"[BulkFlightSearch] Translation failed: {e}")
+                return error_msg
             
             # Format the result (same as before for small searches)
             summary = cheapest.get("summary")
@@ -473,10 +504,30 @@ Without return duration specified, I'll search for one-way tickets only."""
                 return_date = calculate_return_date(search_date, return_duration)
                 response += f"\n\n🔄 For return trip {return_duration} days later ({return_date}), would you like me to search for return flights?"
             
+            # Translate response if user language is not English
+            if detected_language != "en":
+                try:
+                    from ..services.translation_service import translation_service
+                    translated_response = translation_service.translate_from_english(response, detected_language)
+                    if translated_response:
+                        response = translated_response
+                except Exception as e:
+                    print(f"[BulkFlightSearch] Translation failed: {e}")
+            
             return response
         
     except Exception as e:
-        return f"Error setting up bulk search: {str(e)}"
+        error_msg = f"Error setting up bulk search: {str(e)}"
+        # Translate error message if needed
+        if detected_language != "en":
+            try:
+                from ..services.translation_service import translation_service
+                translated_error = translation_service.translate_from_english(error_msg, detected_language)
+                if translated_error:
+                    error_msg = translated_error
+            except Exception as trans_e:
+                print(f"[BulkFlightSearch] Translation failed: {trans_e}")
+        return error_msg
 
 
 

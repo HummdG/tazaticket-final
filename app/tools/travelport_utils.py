@@ -1055,7 +1055,7 @@ def queue_bulk_search_task(task_func: Callable, *args, **kwargs):
 def execute_bulk_search_background(origin: str, destination: str, dates: List[str], 
                                  number_of_passengers: int, carriers: List[str],
                                  trip_type: str, thread_id: str = "unknown", user_phone: str = None,
-                                 original_user_input: str = ""):
+                                 original_user_input: str = "", detected_language: str = "en"):
     """
     Execute bulk search in background and send result via callback.
     This function runs in a separate thread.
@@ -1179,6 +1179,17 @@ def execute_bulk_search_background(origin: str, destination: str, dates: List[st
         else:
             message = f"❌ Bulk search completed but no flights found across {bulk_result.get('total_searches', 0)} dates."
         
+        # Translate message if user language is not English
+        if detected_language != "en":
+            try:
+                from ..services.translation_service import translation_service
+                translated_message = translation_service.translate_from_english(message, detected_language)
+                if translated_message:
+                    message = translated_message
+                    print(f"[BulkSearch] Translated response to {detected_language}")
+            except Exception as e:
+                print(f"[BulkSearch] Translation failed: {e}")
+        
         # Send the result back to the user
         print(f"[BulkSearch] About to send response to thread_id: {thread_id}")
         send_async_response(thread_id, message, user_phone)
@@ -1186,6 +1197,17 @@ def execute_bulk_search_background(origin: str, destination: str, dates: List[st
         
     except Exception as e:
         error_message = f"❌ Bulk search failed: {str(e)}"
+        
+        # Translate error message if needed
+        if detected_language != "en":
+            try:
+                from ..services.translation_service import translation_service
+                translated_error = translation_service.translate_from_english(error_message, detected_language)
+                if translated_error:
+                    error_message = translated_error
+            except Exception as trans_e:
+                print(f"[BulkSearch] Error translation failed: {trans_e}")
+        
         send_async_response(thread_id, error_message, user_phone)
         print(f"[BulkSearch] Background execution error: {e}")
     finally:
