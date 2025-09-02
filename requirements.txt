@@ -15,3 +15,4 @@ twilio>=8.2.0
 openai>=1.0.0 
 assemblyai
 google-cloud-translate>=3.15.0
+gradio_client>=0.8.0
