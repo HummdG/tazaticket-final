@@ -295,17 +295,34 @@ class SpeechProcessor:
             return None
             
         try:
-            # Select appropriate voice for the detected language
-            voice = self._get_voice_for_language(detected_language)
+            tts_text = text
+            tts_language = detected_language
+            
+            # Special handling for Punjabi: translate English text to pa-Arab and use Urdu voice
+            if detected_language == "pa" or detected_language == "pa_in" or detected_language == "pa_pk":
+                print(f"🌍 Detected Punjabi language, translating English text to Shahmukhi script")
+                from app.services.translation_service import translation_service
+                
+                translated_text = translation_service.translate_en_to_shahmukhi(text)
+                if translated_text:
+                    tts_text = translated_text
+                    tts_language = "ur"  # Use Urdu voice for Punjabi Shahmukhi
+                    print(f"🔄 Using Punjabi (Shahmukhi) text with Urdu voice: '{tts_text[:50]}...'")
+                else:
+                    print(f"⚠️ Failed to translate to Shahmukhi, using original text with Urdu voice")
+                    tts_language = "ur"  # Still use Urdu voice as fallback
+            
+            # Select appropriate voice for the TTS language
+            voice = self._get_voice_for_language(tts_language)
             
             # Create temporary file for the audio
             temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.mp3')
             temp_file.close()
             
             # Generate speech using SpeechGen
-            output_path = self.speechgen_client.tts_quick(voice, text, temp_file.name)
+            output_path = self.speechgen_client.tts_quick(voice, tts_text, temp_file.name)
             
-            print(f"🔊 SpeechGen TTS successful: {text[:50]}... (voice: {voice})")
+            print(f"🔊 SpeechGen TTS successful: {tts_text[:50]}... (voice: {voice})")
             return output_path
             
         except Exception as e:
@@ -397,12 +414,19 @@ def process_voice_message_background(media_url: str, thread_id: str, from_number
         # Step 4: Translate response back to detected language if needed
         if detected_language != "en":
             from app.services.translation_service import translation_service
-            translated_reply = translation_service.translate_from_english(reply_text, detected_language)
-            if translated_reply:
-                reply_text = translated_reply
-                print(f"[VoiceProcessor] Translated response to {detected_language}: '{reply_text[:50]}...'")
+            
+            # Special handling for Punjabi - don't translate the response here
+            # The TTS pipeline will handle English->Shahmukhi translation
+            if detected_language not in ["pa", "pa_in", "pa_pk"]:
+                translated_reply = translation_service.translate_from_english(reply_text, detected_language)
+                if translated_reply:
+                    reply_text = translated_reply
+                    print(f"[VoiceProcessor] Translated response to {detected_language}: '{reply_text[:50]}...'")
+            else:
+                print(f"[VoiceProcessor] Keeping English response for Punjabi TTS pipeline: '{reply_text[:50]}...'")
         
         # Step 5: Convert to speech (minimal local storage)
+        # For Punjabi, pass the English text - TTS pipeline will handle translation
         audio_file_path = speech_processor.text_to_speech(reply_text, detected_language)
         if not audio_file_path:
             # Fallback to text if TTS fails

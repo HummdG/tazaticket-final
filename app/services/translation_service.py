@@ -4,6 +4,7 @@ Translation service using OpenAI for language detection and translation
 import os
 from typing import Optional, Tuple
 from openai import OpenAI
+from google.cloud import translate_v3 as translate
 
 
 class TranslationService:
@@ -145,6 +146,45 @@ class TranslationService:
         
         translated_text = self.translate_to_english(text, detected_language)
         return detected_language, translated_text
+    
+    def translate_en_to_shahmukhi(self, text: str) -> Optional[str]:
+        """
+        Translate English text to Punjabi (Shahmukhi / Arabic script) using Google Cloud Translation v3.
+        
+        Args:
+            text: English text to translate
+            
+        Returns:
+            Translated text in Punjabi (Shahmukhi) or None if error
+        """
+        try:
+            # Get project ID from environment variable
+            project_id = os.getenv('GOOGLE_CLOUD_PROJECT_ID')
+            if not project_id:
+                print("⚠️ Warning: GOOGLE_CLOUD_PROJECT_ID not found in environment variables")
+                return None
+            
+            client = translate.TranslationServiceClient()
+            parent = f"projects/{project_id}/locations/global"
+
+            response = client.translate_text(
+                request={
+                    "parent": parent,
+                    "contents": [text],
+                    "mime_type": "text/plain",
+                    "source_language_code": "en",
+                    "target_language_code": "pa-Arab",
+                }
+            )
+
+            # API returns a list; we asked for one string, so take the first.
+            translated_text = response.translations[0].translated_text
+            print(f"🔄 Translated to Punjabi (Shahmukhi): '{text[:30]}...' -> '{translated_text[:30]}...'")
+            return translated_text
+            
+        except Exception as e:
+            print(f"❌ Error translating to Punjabi (Shahmukhi): {e}")
+            return None
     
     def is_configured(self) -> bool:
         """Check if OpenAI API key is configured"""
