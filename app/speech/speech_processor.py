@@ -12,6 +12,160 @@ from openai import OpenAI
 import queue
 import threading
 
+
+def _normalize_lang_code(code: str) -> str:
+    """
+    Normalize a detected language code to a canonical 'll' or 'll_rr' form
+    compatible with our VOICE_MAP keys.
+    Examples:
+      'en', 'en-US', 'en_us', 'EN-gb' -> 'en'
+      'es-419' -> 'es_419'
+      'pa-IN' -> 'pa_in'
+      'pa-PK' -> 'pa_pk'
+      'zh-Hant' -> 'zh_hant'
+      'yue' -> 'yue' (Cantonese)
+    """
+    if not code:
+        return "en"
+    c = code.strip().replace("-", "_").lower()
+    # Some providers use legacy tags
+    legacy = {
+        "iw": "he",       # Hebrew
+        "prs": "fa",      # Dari
+        "cmn": "zh",      # Mandarin treated as zh
+    }
+    c = legacy.get(c, c)
+
+    # Common country aliases -> regioned forms
+    region_alias = {
+        "en_gb": "en", "en_uk": "en", "en_us": "en", "en_au": "en", "en_ca": "en",
+        "en_ie": "en", "en_nz": "en", "en_ph": "en", "en_za": "en",
+        "es_es": "es", "es_mx": "es", "es_ar": "es", "es_co": "es", "es_cl": "es",
+        "es_pe": "es", "es_ve": "es", "es_uy": "es", "es_bo": "es",
+        "pt_pt": "pt", "pt_br": "pt",
+        "fr_fr": "fr", "fr_ca": "fr", "fr_be": "fr", "fr_ch": "fr",
+        "ru_ru": "ru",
+        "zh_cn": "zh", "zh_sg": "zh",
+        # Keep specific ones we care about distinct
+        "zh_tw": "zh_tw",
+        "zh_hk": "zh_hk",
+        "es_419": "es_419",
+        "zh_hans": "zh_hans",
+        "zh_hant": "zh_hant",
+        "pa_in": "pa_in",
+        "pa_pk": "pa_pk",
+    }
+    c = region_alias.get(c, c)
+
+    # If it has script subtags like zh_Hant_TW → prefer script when useful
+    parts = c.split("_")
+    if parts[0] == "zh":
+        # Cantonese special cases
+        if "yue" in parts or c == "yue":
+            return "yue"
+        if "hk" in parts:
+            return "zh_hk"
+        if "tw" in parts:
+            return "zh_tw"
+        if "hant" in parts:
+            return "zh_hant"
+        if "hans" in parts:
+            return "zh_hans"
+        return "zh"
+
+    return c
+
+# Canonical language-code → exact SpeechGen voice names (from your list)
+VOICE_MAP = {
+    # English (defaulting all en* to Amelia)
+    "en": "Amelia",
+
+    # Africa / Middle East / Asia
+    "af": "Adri",                 # Afrikaans
+    "sq": "Anila",                # Albanian
+    "am": "Mekdes",               # Amharic
+    "ar": "Farida",               # Arabic
+    "hy": "Anahit",               # Armenian
+    "az": "Banu",                 # Azerbaijani
+    "eu": "Ainhoa",               # Basque
+    "bn": "Nabanita",             # Bengali
+    "bs": "Vesna",                # Bosnian
+    "bg": "Kalina",               # Bulgarian
+    "my": "Nilar",                # Burmese
+    "ca": "Alba",                 # Catalan
+    "zh": "Zhiyu plus",           # Chinese (Mandarin generic)
+    "zh_hans": "Zhiyu plus",
+    "zh_hant": "Zhiyu plus",
+    "zh_tw": "Zhiyu plus",
+    "zh_hk": "HiuGaai",           # if Hong Kong, prefer Cantonese voice
+    "yue": "HiuGaai",             # Cantonese
+    "hr": "Gabrijela",            # Croatian
+    "cs": "Jitka plus",           # Czech
+    "da": "Leonora",              # Danish
+    "nl_be": "Dena",              # Dutch (Belgian)
+    "et": "Anu",                  # Estonian
+    "fil": "Amihan", "tl": "Amihan",  # Filipino
+    "fi": "Suvi plus",            # Finnish
+    "fr": "Abelin",               # French
+    "gl": "Sabela",               # Galician
+    "ka": "Eka",                  # Georgian
+    "de": "Angelika",             # German
+    "el": "Ophelia",              # Greek
+    "gu": "Dhwani",               # Gujarati
+    "he": "Miriam",               # Hebrew
+    "hi": "Swara",                # Hindi
+    "hu": "Noemi",                # Hungarian
+    "is": "Gudrun",               # Icelandic
+    "id": "Dzhu",                 # Indonesian
+    "ga": "Orla",                 # Irish
+    "it": "Bianca plus",          # Italian
+    "ja": "Aoi",                  # Japanese
+    "jv": "Siti",                 # Javanese
+    "kn": "Sapna",                # Kannada
+    "kk": "Aigul",                # Kazakh
+    "km": "Sreymom",              # Khmer
+    "ko": "Jihye plus",           # Korean
+    "lo": "Keomany",              # Lao
+    "lv": "Everita",              # Latvian
+    "lt": "Ona",                  # Lithuanian
+    "mk": "Marija",               # Macedonian
+    "ms": "Yasmin",               # Malay
+    "ml": "Sobhana",              # Malayalam
+    "mt": "Ganni",                # Maltese
+    "mr": "Aarohi",               # Marathi
+    "mn": "Yesui",                # Mongolian
+    "ne": "Hemkala",              # Nepali
+    "no": "Ida plus", "nb": "Ida plus", "nn": "Ida plus",  # Norwegian
+    "ps": "Latifa",               # Pashto
+    "fa": "Dilara",               # Persian/Farsi
+    "pl": "Ola plus",             # Polish
+    "pt": "Ines plus",            # Portuguese
+    "pa_in": "Gurpreet",          # Punjabi (India, Gurmukhi)
+    "pa_pk": "Uzma",              # Punjabi (Pakistan, Shahmukhi via Urdu)
+    "pa": "Gurpreet",             # Default Punjabi -> Indian voice unless specified
+    "ro": "Anisa",                # Romanian
+    "ru": "Elena",                # Russian
+    "sr": "Sophie",               # Serbian
+    "si": "Thilini",              # Sinhala
+    "sk": "Viktoria",             # Slovak
+    "sl": "Petra",                # Slovenian
+    "so": "Ubax",                 # Somali
+    "es": "Abril",                # Spanish
+    "su": "Tuti",                 # Sundanese
+    "sw": "Zuri",                 # Swahili
+    "sv": "Elin plus",            # Swedish
+    "ta": "Pallavi",              # Tamil
+    "te": "Shruti",               # Telugu
+    "th": "Achara",               # Thai
+    "tr": "Chilek",               # Turkish
+    "uk": "Uliana",               # Ukrainian
+    "ur": "Uzma",                 # Urdu
+    "uz": "Madina",               # Uzbek
+    "vi": "Linh",                 # Vietnamese
+    "zu": "Thando",               # Zulu
+}
+
+
 # Global task queue for voice processing
 _voice_task_queue = queue.Queue()
 _voice_worker_thread = None
@@ -103,128 +257,51 @@ class SpeechProcessor:
             self.speechgen_client = None
     
     def _get_voice_for_language(self, detected_language: str, fallback_voice: str = "John") -> str:
-        """Select appropriate voice based on detected language"""
+        """
+        Pick a SpeechGen voice deterministically from detected language code,
+        with a final fallback to API probing if unrecognized.
+        """
         if not self.speechgen_client:
             return fallback_voice
-        
+
         try:
-            # Map common language codes to SpeechGen format
-            lang_map = {
-                # --- English & variants ---
-                "en": "en", "en_us": "en", "en_gb": "en", "en_uk": "en", "en_au": "en", "en_ca": "en",
-                "en_in": "en", "en_ie": "en", "en_nz": "en", "en_ph": "en", "en_za": "en",
+            lang_norm = _normalize_lang_code(detected_language)
+            # 1) Direct map: fastest and deterministic
+            mapped = VOICE_MAP.get(lang_norm)
+            if mapped:
+                print(f"🗣️ Selected mapped voice '{mapped}' for language '{lang_norm}' (raw: '{detected_language}')")
+                return mapped
 
-                # --- Romance languages ---
-                "es": "es", "es_419": "es", "es_mx": "es", "es_es": "es", "es_ar": "es",
-                "es_co": "es", "es_cl": "es", "es_pe": "es", "es_ve": "es", "es_uy": "es", "es_bo": "es",
+            # 2) Try collapsing to base language (e.g., 'es_419' -> 'es')
+            base = lang_norm.split("_")[0]
+            if base in VOICE_MAP:
+                print(f"🗣️ Selected base voice '{VOICE_MAP[base]}' for language '{lang_norm}' (raw: '{detected_language}')")
+                return VOICE_MAP[base]
 
-                "pt": "pt", "pt_br": "pt", "pt_pt": "pt", "pt_mz": "pt",
-
-                "fr": "fr", "fr_fr": "fr", "fr_ca": "fr", "fr_be": "fr", "fr_ch": "fr",
-
-                "it": "it", "ro": "ro", "ro_ro": "ro",
-
-                "ca": "ca", "gl": "gl",
-
-                # --- Germanic languages ---
-                "de": "de", "de_de": "de", "de_at": "de", "de_ch": "de",
-                "nl": "nl", "nl_nl": "nl", "nl_be": "nl",
-                "sv": "sv", "sv_se": "sv",
-                "da": "da", "no": "no", "nb": "no", "nn": "no",
-                "is": "is",
-
-                # --- Slavic & Baltic ---
-                "pl": "pl", "cs": "cs", "sk": "sk", "sl": "sl",
-                "hr": "hr", "sr": "sr", "sr_rs": "sr", "sr_latn": "sr", "sr_cyrl": "sr",
-                "bs": "bs", "bg": "bg", "mk": "mk",
-                "ru": "ru", "ru_ru": "ru", "uk": "uk", "be": "be",
-                "lv": "lv", "lt": "lt", "et": "et",
-
-                # --- Greek, Turkish, Caucasus, Central Asia ---
-                "el": "el", "el_gr": "el",
-                "tr": "tr", "hy": "hy", "ka": "ka",
-                "az": "az", "kk": "kk", "ky": "ky", "uz": "uz", "tk": "tk",
-
-                # --- Semitic & Iranian ---
-                "he": "he", "iw": "he",  # legacy 'iw' -> Hebrew
-                "ar": "ar", "ar_eg": "ar", "ar_sa": "ar", "ar_ae": "ar", "ar_ma": "ar",
-                "ar_lb": "ar", "ar_sy": "ar", "ar_iq": "ar", "ar_dz": "ar", "ar_jo": "ar",
-                "ar_kw": "ar", "ar_om": "ar", "ar_qa": "ar", "ar_bh": "ar", "ar_ye": "ar",
-                "ar_ly": "ar", "ar_tn": "ar", "ar_ps": "ar", "ar_sd": "ar",
-
-                "fa": "fa", "fa_ir": "fa", "fa_af": "fa", "prs": "fa",  # Dari -> fa
-                "kur": "ku", "ku": "ku", "ckb": "ku",  # Sorani -> Kurdish generic
-                "ps": "ps",  # Pashto
-
-                # --- South Asian (India, Pakistan, etc.) ---
-                "hi": "hi", "hi_in": "hi",
-                "bn": "bn", "bn_bd": "bn", "bn_in": "bn",
-                "gu": "gu", "gu_in": "gu",
-                "pa": "pa", "pa_in": "pa", "pa_pk": "pa", "pa_guru": "pa", "pa_arab": "pa",
-                "mr": "mr", "ne": "ne", "si": "si",
-                "ta": "ta", "ta_in": "ta", "ta_lk": "ta",
-                "te": "te", "kn": "kn", "ml": "ml",
-                "as": "as", "or": "or", "sa": "sa",
-                "ur": "ur", "ur_pk": "ur", "ur_in": "ur",
-
-                # --- SE Asia ---
-                "th": "th", "lo": "lo", "km": "km", "my": "my", "vi": "vi",
-                "id": "id", "ms": "ms", "jv": "jv", "su": "su",
-                "tl": "tl", "fil": "tl",
-
-                # --- East Asia ---
-                "zh": "zh", "zh_cn": "zh", "zh_sg": "zh", "zh_tw": "zh", "zh_hk": "zh",
-                "zh_hans": "zh", "zh_hant": "zh", "cmn": "zh", "yue": "zh",  # Mandarin/Cantonese -> zh
-                "ja": "ja", "ko": "ko", "mn": "mn",
-
-                # --- Africa (commonly encountered) ---
-                "am": "am", "ti": "ti", "so": "so",
-                "sw": "sw", "sw_ke": "sw", "sw_tz": "sw",
-                "ha": "ha", "ig": "ig", "yo": "yo",
-                "zu": "zu", "xh": "xh", "st": "st", "tn": "tn", "ts": "ts",
-                "rw": "rw", "mg": "mg", "af": "af",
-
-                # --- Others / constructed / regional ---
-                "sq": "sq", "eo": "eo", "eu": "eu", "ga": "ga", "mt": "mt", "cy": "cy",
-                "glg": "gl", "cat": "ca", "la": "la", "bo": "bo", "ug": "ug",
-            }
-            
-            lang = lang_map.get(detected_language, 'en')
-            print(f"🗣️ Getting voices for language: {lang}")
-            
-            # Special handling for Urdu - always use Uzma
-            if lang == 'ur':
-                print(f"🗣️ Selected voice: Uzma for language: {lang} (hardcoded)")
-                return "Uzma"
-            
-            data = self.speechgen_client.get_voices(langs=[lang])
-            
-            # Handle different response structures
+            # 3) As a last resort, ask SpeechGen which voices exist for the base
+            print(f"🗣️ Unknown code '{detected_language}' → probing SpeechGen for base '{base}'")
+            data = self.speechgen_client.get_voices(langs=[base])
             voices = []
             if isinstance(data, dict):
-                # Check if it's the nested structure like {"Urdu (Pakistan)": [...]}
-                for key, value in data.items():
+                for _, value in data.items():
                     if isinstance(value, list):
                         voices.extend(value)
-                
-                # If no nested structure found, try the direct structure
                 if not voices:
                     voices = data.get("voices", [])
             elif isinstance(data, list):
                 voices = data
-            
-            if voices and len(voices) > 0:
-                # Get the first available voice for the language
+
+            if voices:
                 v = voices[0]
                 voice_name = v.get("voice") or v.get("title") or v.get("name") or fallback_voice
-                print(f"🗣️ Selected voice: {voice_name} for language: {lang}")
+                print(f"🗣️ Selected probed voice '{voice_name}' for base '{base}'")
                 return voice_name
-            else:
-                print(f"⚠️ No voices found for language {lang}, using fallback: {fallback_voice}")
-                return fallback_voice
-                
+
+            print(f"⚠️ No voices found via API for '{base}', using fallback '{fallback_voice}'")
+            return fallback_voice
+
         except Exception as e:
-            print(f"⚠️ Error selecting voice for language {detected_language}: {e}")
+            print(f"⚠️ Error selecting voice for language '{detected_language}': {e}")
             return fallback_voice
     
     def speech_to_text_direct(self, audio_url: str) -> Tuple[Optional[str], Optional[str]]:

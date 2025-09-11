@@ -210,6 +210,8 @@ def load_conversation_state_from_dynamodb(dynamodb_client, thread_id: str) -> Li
     """Load conversation state from DynamoDB (try new format first, fall back to old format)"""
     try:
         print(f"[MemoryManager] Loading conversation state for thread {thread_id}")
+        print(f"[MemoryManager] Attempting to get conversation state item from table {CHAT_HISTORY_TABLE}")
+        
         # First, try to get the new conversation state item
         response = dynamodb_client.get_item(
             TableName=CHAT_HISTORY_TABLE,
@@ -218,6 +220,7 @@ def load_conversation_state_from_dynamodb(dynamodb_client, thread_id: str) -> Li
                 'seq': {'N': '-1'}  # Conversation state is always at seq=-1
             }
         )
+        print(f"[MemoryManager] DynamoDB get_item completed successfully")
         
         if 'Item' in response:
             print(f"[MemoryManager] Found conversation state item for thread {thread_id}")
@@ -266,7 +269,11 @@ def load_conversation_state_from_dynamodb(dynamodb_client, thread_id: str) -> Li
         else:
             print(f"[MemoryManager] No conversation state found, falling back to reading individual messages")
             # Fall back to old format - query individual messages
-            return read_pairs_from_dynamodb(dynamodb_client, thread_id, CONTEXT_PAIRS)
+            try:
+                return read_pairs_from_dynamodb(dynamodb_client, thread_id, CONTEXT_PAIRS)
+            except Exception as fallback_error:
+                print(f"[MemoryManager] Fallback read_pairs_from_dynamodb also failed: {fallback_error}")
+                return []
         
     except Exception as e:
         print(f"[MemoryManager] Error loading conversation state for thread {thread_id}: {e}")

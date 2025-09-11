@@ -206,39 +206,61 @@ class MemoryManager:
         thread_state = self._get_thread_state(thread_id)
         
         with thread_state.lock:
-            # Check if session has been idle
-            if self._is_session_idle(thread_state):
-                print(f"[MemoryManager] Session idle, starting fresh for thread {thread_id}")
-                # Flush all remaining pairs and start new session
-                self.flush_all(thread_id)
-                thread_state.session_id = str(uuid.uuid4())
-                thread_state.context_pairs.clear()
-                thread_state.batch_pairs.clear()
-                thread_state.open_pair = None
-            
-            # Load conversation state from DynamoDB into context
-            if not thread_state.context_pairs:
-                print(f"[MemoryManager] Loading conversation state from DynamoDB for thread {thread_id}")
-                pairs = load_conversation_state_from_dynamodb(self.dynamodb, thread_id)
-                thread_state.context_pairs = pairs
+            try:
+                # Check if session has been idle
+                if self._is_session_idle(thread_state):
+                    print(f"[MemoryManager] Session idle, starting fresh for thread {thread_id}")
+                    
+                    # Flush all remaining pairs and start new session
+                    print(f"[MemoryManager] Flushing all pairs before starting fresh...")
+                    try:
+                        self.flush_all(thread_id)
+                        print(f"[MemoryManager] Successfully flushed all pairs")
+                    except Exception as e:
+                        print(f"[MemoryManager] Error during flush_all: {e}")
+                        # Continue even if flush fails
+                    
+                    thread_state.session_id = str(uuid.uuid4())
+                    thread_state.context_pairs.clear()
+                    thread_state.batch_pairs.clear()
+                    thread_state.open_pair = None
+                    print(f"[MemoryManager] Cleared session state, new session_id: {thread_state.session_id}")
                 
-                # Update next_seq and next_turn based on loaded data
-                if pairs:
-                    max_turn = max(p.turn for p in pairs)
-                    max_seq = 0
-                    for p in pairs:
-                        if p.user_message and isinstance(p.user_message.seq, int):
-                            max_seq = max(max_seq, p.user_message.seq)
-                        if p.assistant_message and isinstance(p.assistant_message.seq, int):
-                            max_seq = max(max_seq, p.assistant_message.seq)
-                    thread_state.next_turn = max_turn + 1
-                    thread_state.next_seq = max_seq + 1
-                    print(f"[MemoryManager] Updated counters: next_seq={thread_state.next_seq}, next_turn={thread_state.next_turn}")
-                else:
-                    print(f"[MemoryManager] No existing conversation found for thread {thread_id}")
-            
-            self._mark_activity(thread_state)
-            print(f"[MemoryManager] Session started for thread {thread_id} with {len(thread_state.context_pairs)} pairs in context")
+                # Load conversation state from DynamoDB into context
+                if not thread_state.context_pairs:
+                    print(f"[MemoryManager] Loading conversation state from DynamoDB for thread {thread_id}")
+                    try:
+                        pairs = load_conversation_state_from_dynamodb(self.dynamodb, thread_id)
+                        thread_state.context_pairs = pairs
+                        print(f"[MemoryManager] Successfully loaded {len(pairs)} pairs from DynamoDB")
+                        
+                        # Update next_seq and next_turn based on loaded data
+                        if pairs:
+                            max_turn = max(p.turn for p in pairs)
+                            max_seq = 0
+                            for p in pairs:
+                                if p.user_message and isinstance(p.user_message.seq, int):
+                                    max_seq = max(max_seq, p.user_message.seq)
+                                if p.assistant_message and isinstance(p.assistant_message.seq, int):
+                                    max_seq = max(max_seq, p.assistant_message.seq)
+                            thread_state.next_turn = max_turn + 1
+                            thread_state.next_seq = max_seq + 1
+                            print(f"[MemoryManager] Updated counters: next_seq={thread_state.next_seq}, next_turn={thread_state.next_turn}")
+                        else:
+                            print(f"[MemoryManager] No existing conversation found for thread {thread_id}")
+                    except Exception as e:
+                        print(f"[MemoryManager] Error loading conversation state: {e}")
+                        # Continue with empty context if loading fails
+                        thread_state.context_pairs = []
+                
+                self._mark_activity(thread_state)
+                print(f"[MemoryManager] Session started for thread {thread_id} with {len(thread_state.context_pairs)} pairs in context")
+                
+            except Exception as e:
+                print(f"[MemoryManager] Critical error in on_session_start for thread {thread_id}: {e}")
+                # Ensure we don't leave the session in a broken state
+                self._mark_activity(thread_state)
+                print(f"[MemoryManager] Marked activity despite error, continuing with empty context")
     
     def on_session_end(self, thread_id: str) -> None:
         """End session and flush all remaining pairs"""
