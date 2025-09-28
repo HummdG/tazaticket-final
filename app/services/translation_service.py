@@ -11,11 +11,13 @@ class TranslationService:
     """Handles language detection and translation using OpenAI"""
     
     def __init__(self):
+        # Done: async client: AsyncOpenAI, most probably if available
         self.client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
         if not os.getenv('OPENAI_API_KEY'):
             print("⚠️ Warning: OPENAI_API_KEY not found in environment variables")
-    
-    def detect_language(self, text: str) -> str:
+
+
+    async def detect_language(self, text: str) -> str:
         """
         Detect the language of the given text using OpenAI
         
@@ -26,7 +28,8 @@ class TranslationService:
             Language code (e.g., 'en', 'ur', 'es', 'fr', etc.) or 'en' as fallback
         """
         try:
-            response = self.client.chat.completions.create(
+            # TD: async client using httpx/aiohttp
+            response = await self.client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
                     {
@@ -50,7 +53,7 @@ class TranslationService:
             print(f"❌ Error detecting language: {e}")
             return "en"  # Default to English
     
-    def translate_to_english(self, text: str, source_language: str) -> Optional[str]:
+    async def translate_to_english(self, text: str, source_language: str) -> Optional[str]:
         """
         Translate text from source language to English
         
@@ -65,7 +68,8 @@ class TranslationService:
             return text  # Already in English
         
         try:
-            response = self.client.chat.completions.create(
+            # TD: async await create
+            response = await self.client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
                     {
@@ -90,8 +94,8 @@ class TranslationService:
         except Exception as e:
             print(f"❌ Error translating to English: {e}")
             return None
-    
-    def translate_from_english(self, text: str, target_language: str) -> Optional[str]:
+
+    async def translate_from_english(self, text: str, target_language: str) -> Optional[str]:
         """
         Translate text from English to target language
         
@@ -106,7 +110,8 @@ class TranslationService:
             return text  # Already in English
         
         try:
-            response = self.client.chat.completions.create(
+            # TD: async await create
+            response = await self.client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
                     {

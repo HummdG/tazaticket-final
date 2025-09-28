@@ -19,7 +19,7 @@ except ImportError:
     )
 
 @tool("TravelportSearch")
-def TravelportSearch(payload: dict, trip_type: str = "one-way"):
+async def TravelportSearch(payload: dict, trip_type: str = "one-way"):
     """This tool calls the travelport rest api to get the cheapest flight possible for the user's given parameters"""
     load_dotenv()  # Reads .env in current directory
 
@@ -32,7 +32,7 @@ def TravelportSearch(payload: dict, trip_type: str = "one-way"):
     OAUTH_URL       = "https://oauth.pp.travelport.com/oauth/oauth20/token"
     CATALOG_URL     = "https://api.pp.travelport.com/11/air/catalog/search/catalogproductofferings"
 
-    def fetch_password_token():
+    async def fetch_password_token():
         data = {
             "grant_type":    "password",
             "username":      USERNAME,
@@ -41,11 +41,15 @@ def TravelportSearch(payload: dict, trip_type: str = "one-way"):
             "client_secret": CLIENT_SECRET,
             "scope":         "openid"
         }
-        resp = requests.post(
-            OAUTH_URL,
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-            data=data
-        )
+        # TD: async client using httpx
+        # TD: - Implement connection pooling for HTTP requests using httpx.AsyncClient with connection limits
+        import httpx
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                OAUTH_URL,
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                data=data
+            )
         resp.raise_for_status()
         return resp.json()["access_token"]
 
@@ -70,10 +74,14 @@ def TravelportSearch(payload: dict, trip_type: str = "one-way"):
     }
 
     try:
-        response = requests.post(CATALOG_URL, headers=headers, json=payload)
-        response.raise_for_status()
-        resp_json = response.json()
-        
+        # TD: async client using httpx
+        # TD: - Implement connection pooling for HTTP requests using httpx.AsyncClient with connection limits
+        import httpx
+        async with httpx.AsyncClient() as client:
+            response = await client.post(CATALOG_URL, headers=headers, json=payload)
+            response.raise_for_status()
+            resp_json = response.json()
+
         # Extract summary based on trip type
         if trip_type == "one-way":
             summary = extract_cheapest_one_way_summary(resp_json)

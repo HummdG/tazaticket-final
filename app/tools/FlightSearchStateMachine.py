@@ -2,6 +2,9 @@
 FlightSearchStateMachine tool for managing flight search state and performing searches
 """
 
+
+# TD: redis based implementation
+
 from langchain_core.tools import tool
 from datetime import datetime, timedelta
 import re
@@ -116,7 +119,7 @@ def format_layovers(itinerary: dict) -> str:
 
 
 @tool("FlightSearchStateMachine")
-def FlightSearchStateMachine(
+async def FlightSearchStateMachine(
     origin: Optional[str] = None,
     destination: Optional[str] = None,
     departure_date: Optional[str] = None,
@@ -221,7 +224,8 @@ def FlightSearchStateMachine(
                     number_of_passengers=sm.number_of_passengers,
                     carriers=preferred_carriers
                 )
-                result = TravelportSearch.invoke({"payload": payload, "trip_type": "one-way"})
+                # TD: await async invoke
+                result = await TravelportSearch.invoke({"payload": payload, "trip_type": "one-way"})
             else:
                 payload = RoundTripFlightSearch(
                     origin=sm.origin,
@@ -231,8 +235,9 @@ def FlightSearchStateMachine(
                     number_of_passengers=sm.number_of_passengers,
                     carriers=preferred_carriers
                 )
-                result = TravelportSearch.invoke({"payload": payload, "trip_type": "round-trip"})
-            
+                # TD: await async invoke
+                result = await TravelportSearch.invoke({"payload": payload, "trip_type": "round-trip"})
+
             if result.get("ok"):
                 summary = result.get("summary")
                 if summary:
