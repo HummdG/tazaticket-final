@@ -6,6 +6,7 @@ import tempfile
 import urllib.parse
 import time
 from typing import Optional, Callable, Tuple, Dict, Any
+import httpx
 import requests
 import assemblyai as aai
 from openai import OpenAI
@@ -167,6 +168,7 @@ VOICE_MAP = {
 
 
 # Global task queue for voice processing
+# TD: redis based queue
 _voice_task_queue = queue.Queue()
 _voice_worker_thread = None
 _voice_worker_running = False
@@ -181,19 +183,22 @@ class SpeechGenClient:
         self.token = token
         self.email = email
         self.base_url = "https://speechgen.io/"
-        self._session = requests.Session()
-    
-    def get_voices(self, langs: Optional[list] = None) -> Dict[str, Any]:
+        # TD: async client using httpx
+        # TD: - Implement connection pooling for HTTP requests using httpx.AsyncClient with connection limits
+        self._session = httpx.AsyncClient()
+
+    async def get_voices(self, langs: Optional[list] = None) -> Dict[str, Any]:
         """Get available voices, optionally filtered by languages"""
         url = urllib.parse.urljoin(self.base_url, "index.php?r=api/voices")
         params = {}
         if langs:
             params["langs"] = ",".join(langs)
-        resp = self._session.get(url, params=params, timeout=30)
+        # Done: async await call
+        resp = await self._session.get(url, params=params, timeout=30)
         resp.raise_for_status()
         return resp.json()
-    
-    def tts_quick(self, voice: str, text: str, output_path: str) -> str:
+
+    async def tts_quick(self, voice: str, text: str, output_path: str) -> str:
         """Generate TTS audio file using quick API (<=2000 chars)"""
         if len(text) > 2000:
             raise ValueError("Text too long for quick TTS (max 2000 chars)")
@@ -211,10 +216,12 @@ class SpeechGenClient:
         }
         
         # Submit TTS request
-        resp = self._session.post(url, data=payload, timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
-        
+        # TD: async await call
+        # TD: - Implement connection pooling for HTTP requests using httpx.AsyncClient with connection limits
+        async with self._session.post(url, data=payload, timeout=30) as resp:
+            resp.raise_for_status()
+            data = resp.json()
+
         status = int(data.get("status", -1))
         if status == -1:
             raise RuntimeError(f"SpeechGen TTS failed: {data.get('error', 'unknown error')}")
@@ -228,7 +235,8 @@ class SpeechGenClient:
         if not file_url.startswith("http"):
             file_url = urllib.parse.urljoin(self.base_url, file_url.lstrip("/"))
         
-        with self._session.get(file_url, timeout=30) as r:
+        # TD: async await call
+        async with self._session.get(file_url, timeout=30) as r:
             r.raise_for_status()
             os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
             with open(output_path, "wb") as f:
@@ -243,6 +251,7 @@ class SpeechProcessor:
     
     def __init__(self):
         # Initialize AssemblyAI for STT
+        # TD: async client if available 
         aai.settings.api_key = os.getenv('ASSEMBLYAI_API_KEY')
         if not os.getenv('ASSEMBLYAI_API_KEY'):
             print("⚠️ Warning: ASSEMBLYAI_API_KEY not found in environment variables")
@@ -303,8 +312,8 @@ class SpeechProcessor:
         except Exception as e:
             print(f"⚠️ Error selecting voice for language '{detected_language}': {e}")
             return fallback_voice
-    
-    def speech_to_text_direct(self, audio_url: str) -> Tuple[Optional[str], Optional[str]]:
+    # TD: async await
+    async def speech_to_text_direct(self, audio_url: str) -> Tuple[Optional[str], Optional[str]]:
         """
         Convert speech to text using AssemblyAI with language detection
         
@@ -337,9 +346,10 @@ class SpeechProcessor:
                 print(f"✅ Using S3 presigned URL for AssemblyAI: {transcription_url[:50]}...")
             
             # Configure AssemblyAI transcription with language detection
+            # TD: async await
             config = aai.TranscriptionConfig(language_detection=True)
-            transcript = aai.Transcriber(config=config).transcribe(transcription_url)
-            
+            transcript = await aai.Transcriber(config=config).transcribe(transcription_url)
+
             if transcript.status == "error":
                 print(f"❌ AssemblyAI transcription failed: {transcript.error}")
                 return None, None
@@ -410,7 +420,8 @@ class SpeechProcessor:
         """Check if OpenAI API key is configured"""
         return bool(os.getenv('OPENAI_API_KEY'))
 
-def _voice_worker():
+# TD: async task processing
+async def _voice_worker():
     """Background worker that processes voice tasks"""
     global _voice_worker_running
     _voice_worker_running = True
@@ -529,7 +540,7 @@ def process_voice_message_background(media_url: str, thread_id: str, from_number
         print(f"[VoiceProcessor] Background processing error: {e}")
         send_twilio_message(from_number, "Sorry, there was an error processing your voice message.")
 
-def send_twilio_message(to_number: str, message: str):
+async def send_twilio_message(to_number: str, message: str):
     """Send a text message via Twilio"""
     try:
         from twilio.rest import Client
@@ -541,9 +552,10 @@ def send_twilio_message(to_number: str, message: str):
         if not all([account_sid, auth_token]):
             print("❌ Twilio credentials missing for message sending")
             return
-        
+        # TD: async client 
         client = Client(account_sid, auth_token)
-        message = client.messages.create(
+        # TD: async await
+        message = await client.messages.create(
             body=message,
             from_=from_number,
             to=to_number
@@ -553,7 +565,7 @@ def send_twilio_message(to_number: str, message: str):
     except Exception as e:
         print(f"❌ Error sending Twilio message: {e}")
 
-def send_twilio_voice_message(to_number: str, media_url: str):
+async def send_twilio_voice_message(to_number: str, media_url: str):
     """Send a voice message via Twilio"""
     try:
         from twilio.rest import Client
@@ -565,9 +577,10 @@ def send_twilio_voice_message(to_number: str, media_url: str):
         if not all([account_sid, auth_token]):
             print("❌ Twilio credentials missing for voice message sending")
             return
-        
+        # TD: async client
         client = Client(account_sid, auth_token)
-        message = client.messages.create(
+        # TD: async await
+        message = await client.messages.create(
             media_url=[media_url],
             from_=from_number,
             to=to_number
