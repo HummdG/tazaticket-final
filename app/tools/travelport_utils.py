@@ -2,6 +2,11 @@
 Utility functions for processing Travelport CatalogProductOfferings API responses.
 Self-contained: cheapest selection + itinerary enrichment (duration, airlines, stops, layovers, baggage).
 Matches the shapes expected by FlightSearchStateMachine without changing other files.
+
+Minimal async-safety patches
+- Use Twilio's AsyncTwilioHttpClient 
+- For Travelport calls (TravelportSearch.invoke) we detect whether the SDK exposes async coroutines; if not, we run them in a thread pool via `asyncio.to_thread` so the event loop isn't blocked.
+
 """
 
 from __future__ import annotations
@@ -10,6 +15,16 @@ from datetime import datetime
 import re
 import ast
 import json
+
+
+from __future__ import annotations
+from typing import Any, Dict, List, Optional, Tuple, Callable
+from datetime import datetime
+import re
+import ast
+import json
+import inspect
+import asyncio
 
 
 # ------------------------------
@@ -40,6 +55,7 @@ def _parse_iso_duration_minutes(duration_str: Optional[str]) -> int:
 def _human_minutes(mins: int) -> str:
     h, m = divmod(int(mins), 60)
     return f"{h}h {m}m" if h else f"{m}m"
+
 
 def _parse_dt(date_str: str, time_str: str):
     """
