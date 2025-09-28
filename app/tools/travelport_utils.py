@@ -94,6 +94,7 @@ def _build_indexes(resp: Dict[str, Any]) -> Tuple[Dict[str, Dict[str, Any]], Dic
       - CatalogProductOfferingsResponse.ReferenceList[...] (array of typed blocks)
       - CatalogProductOfferingsResponse.ReferenceListFlight / ReferenceListTermsAndConditions (objects)
     """
+
     root = resp.get("CatalogProductOfferingsResponse", {}) or {}
 
     flights_by_id: Dict[str, Dict[str, Any]] = {}
@@ -714,8 +715,9 @@ async def search_single_date_async(payload_func, origin: str, destination: str, 
         )
         
         # Perform the search (this is blocking, but we're calling it in an executor)
-        result = TravelportSearch.invoke({"payload": payload, "trip_type": trip_type})
-        
+        # TD: async await invoke
+        result = await TravelportSearch.invoke({"payload": payload, "trip_type": trip_type})
+
         # Add date information to result
         result["search_date"] = date
         return result
@@ -808,7 +810,7 @@ async def bulk_search_cheapest_async(origin: str, destination: str, dates: List[
     }
 
 
-def bulk_search_cheapest_sync(origin: str, destination: str, dates: List[str], 
+async def bulk_search_cheapest_sync(origin: str, destination: str, dates: List[str], 
                              number_of_passengers: int, carriers: List[str], 
                              trip_type: str = "one-way") -> Dict[str, Any]:
     """
@@ -866,7 +868,8 @@ def bulk_search_cheapest_sync(origin: str, destination: str, dates: List[str],
             )
             
             # Perform the search
-            result = TravelportSearch.invoke({"payload": payload, "trip_type": trip_type})
+            # TD: await async invoke
+            result = await TravelportSearch.invoke({"payload": payload, "trip_type": trip_type})
             print(f"[BulkSearch] Completed search for {date}: {'OK' if result.get('ok') else 'FAILED'}")
             
             # Add date information to result
@@ -987,13 +990,15 @@ from queue import Queue
 from typing import Callable
 
 # Global task queue for background processing
+# TD:edis based queue 
 _task_queue = Queue()
 _worker_running = False
 _worker_thread = None
 _active_searches = set()  # Track active searches to prevent duplicates
 _pending_messages = {}  # Storage for pending messages
 
-def _background_worker():
+# TD: async task processing
+async def _background_worker():
     """Background worker that processes bulk search tasks"""
     global _worker_running
     print("[BulkSearch] Background worker started")
@@ -1027,6 +1032,7 @@ def start_background_worker():
     
     if not _worker_running:
         _worker_running = True
+        # TD: async task processing
         _worker_thread = threading.Thread(target=_background_worker, daemon=True)
         _worker_thread.start()
         print("[BulkSearch] Background worker thread started")
@@ -1052,7 +1058,7 @@ def queue_bulk_search_task(task_func: Callable, *args, **kwargs):
     print(f"[BulkSearch] Task queued for background processing")
 
 
-def execute_bulk_search_background(origin: str, destination: str, dates: List[str], 
+async def execute_bulk_search_background(origin: str, destination: str, dates: List[str], 
                                  number_of_passengers: int, carriers: List[str],
                                  trip_type: str, thread_id: str = "unknown", user_phone: str = None,
                                  original_user_input: str = "", detected_language: str = "en"):
@@ -1143,8 +1149,9 @@ def execute_bulk_search_background(origin: str, destination: str, dates: List[st
                         )
                         
                         from .TravelportSearch import TravelportSearch
-                        return_result = TravelportSearch.invoke({"payload": return_payload, "trip_type": "one-way"})
-                        
+                        # TD: await async invoke
+                        return_result = await TravelportSearch.invoke({"payload": return_payload, "trip_type": "one-way"})
+
                         if return_result.get("ok") and return_result.get("summary"):
                             return_summary = return_result["summary"]
                             return_price = return_summary.get("price", {})
@@ -1255,7 +1262,7 @@ def send_async_response(thread_id: str, message: str, user_phone: str = None):
         print(f"[BulkSearch] Failed to send WhatsApp message: {e}")
 
 
-def send_whatsapp_message(phone_number: str, message: str):
+async def send_whatsapp_message(phone_number: str, message: str):
     """
     Send a WhatsApp message via Twilio REST API.
     """
@@ -1279,10 +1286,12 @@ def send_whatsapp_message(phone_number: str, message: str):
             return
         
         # Create Twilio client
+        # TD: async client
         client = Client(account_sid, auth_token)
         
         # Send the WhatsApp message
-        message_obj = client.messages.create(
+        # TD: async await
+        message_obj = await client.messages.create(
             from_=twilio_whatsapp_number,
             body=message,
             to=phone_number
