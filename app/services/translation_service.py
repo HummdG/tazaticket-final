@@ -1,9 +1,9 @@
-"""
+""" 
 Translation service using OpenAI for language detection and translation
 """
 import os
 from typing import Optional, Tuple
-from openai import OpenAI
+from openai import AsyncOpenAI  # switched to async client
 from google.cloud import translate_v3 as translate
 
 
@@ -12,9 +12,19 @@ class TranslationService:
     
     def __init__(self):
         # Done: async client: AsyncOpenAI, most probably if available
-        self.client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+        self.client = AsyncOpenAI(api_key=os.getenv('OPENAI_API_KEY'))
         if not os.getenv('OPENAI_API_KEY'):
             print("⚠️ Warning: OPENAI_API_KEY not found in environment variables")
+
+        # Create a single Google Translate async client to reuse connectioons
+        # TD: reuse client for pooling
+        try:
+            # TranslationServiceAsyncClient uses grpc_asyncio transport by default.
+            self.gcloud_client = translate.TranslationServiceAsyncClient()
+        except Exception as e:
+            # Keep behavior robust if google client init fails (e.g., creds missing)
+            print(f"⚠️ Warning: could not initialize Google Translate async client: {e}")
+            self.gcloud_client = None
 
 
     async def detect_language(self, text: str) -> str:
@@ -110,7 +120,7 @@ class TranslationService:
             return text  # Already in English
         
         try:
-            # TD: async await create
+            # Done: async await create
             response = await self.client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
@@ -134,7 +144,7 @@ class TranslationService:
             print(f"❌ Error translating to {target_language}: {e}")
             return None
     
-    def detect_and_translate_to_english(self, text: str) -> Tuple[str, Optional[str]]:
+    async def detect_and_translate_to_english(self, text: str) -> Tuple[str, Optional[str]]:
         """
         Detect language and translate to English if needed
         
@@ -144,15 +154,15 @@ class TranslationService:
         Returns:
             Tuple of (detected_language, translated_text_or_original)
         """
-        detected_language = self.detect_language(text)
+        detected_language = await self.detect_language(text)
         
         if detected_language == "en":
             return detected_language, text
         
-        translated_text = self.translate_to_english(text, detected_language)
+        translated_text = await self.translate_to_english(text, detected_language)
         return detected_language, translated_text
     
-    def translate_en_to_shahmukhi(self, text: str) -> Optional[str]:
+    async def translate_en_to_shahmukhi(self, text: str) -> Optional[str]:
         """
         Translate English text to Punjabi (Shahmukhi / Arabic script) using Google Cloud Translation v3.
         
@@ -169,10 +179,14 @@ class TranslationService:
                 print("⚠️ Warning: GOOGLE_CLOUD_PROJECT_ID not found in environment variables")
                 return None
             
-            client = translate.TranslationServiceClient()
+            if not self.gcloud_client:
+                print("⚠️ Warning: Google Translate client not initialized")
+                return None
+
             parent = f"projects/{project_id}/locations/global"
 
-            response = client.translate_text(
+            # Use async client's translate_text
+            response = await self.gcloud_client.translate_text(
                 request={
                     "parent": parent,
                     "contents": [text],
@@ -197,4 +211,4 @@ class TranslationService:
 
 
 # Global translation service instance
-translation_service = TranslationService() 
+translation_service = TranslationService()
