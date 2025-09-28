@@ -2,14 +2,18 @@
 Pair-based chat memory manager backed by DynamoDB.
 Keeps last 15 pairs in context, batches pairs for DynamoDB writes,
 and manages session lifecycle with idle timeouts.
+
+Asynchronous changes are implemented.
+
+
+- Converted all DB I/O to `aioboto3`/`async` so many concurrent users don't block.
+- Replace global / per-thread `threading.Lock` with `asyncio.Lock` where possible.
+- Add a bounded semaphore to limit concurrent DynamoDB batch writers (backpressure).
+- Track pending background tasks to log errors and allow graceful shutdown.
+
+
 """
 
-import time
-import uuid
-import json
-from typing import List, Dict, Any, Optional
-import boto3
-import threading
 
 from .memory_utils import (
     Message, Pair, ThreadState,
@@ -18,30 +22,86 @@ from .memory_utils import (
     read_pairs_from_dynamodb, load_conversation_state_from_dynamodb
 )
 
+import time
+import uuid
+import json
+from typing import List, Dict, Any, Optional
+import aioboto3
+import asyncio
+import atexit
+from botocore.config import Config
+
+# Status:
+# TD: Redis
+# Done: Connection Pooling
+# Done: Async Clients
+
+# Connection-pooling knobs
+DEFAULT_MAX_POOL_CONNECTIONS = 50  # tune this based on expected concurrency and HTTP session reuse
+
+
+
+# --- Configurable production knobs ---
+DEFAULT_MAX_CONCURRENT_BATCH_WRITES = 8  # tune to match DynamoDB RCUs / throughput
+
 
 class MemoryManager:
     """
     Pair-aware chat memory manager with DynamoDB persistence.
-    Manages context window, batch buffer, and session lifecycle.
-    """
-    
-    def __init__(self):
-        self.dynamodb = boto3.client('dynamodb', region_name=AWS_REGION)
-        self.threads: Dict[str, ThreadState] = {}
-        self._global_lock = threading.Lock()
+    Converted to fully async API for production concurrency.
 
+    NOTE: All public methods are now `async def` and must be awaited by callers in other files. 
+    """
+
+    def __init__(self, max_concurrent_batch_writes: int = DEFAULT_MAX_CONCURRENT_BATCH_WRITES):
+        # Async session for all network I/O
+        self._aiosession = aioboto3.Session()
+
+        # Configure a botocore connection pool size for aioboto3 clients.
+        # I am setting a conservative default: at least DEFAULT_MAX_POOL_CONNECTIONS,
+        # might scale later
+        pool_size = max(DEFAULT_MAX_POOL_CONNECTIONS, max_concurrent_batch_writes * 8)
+        self._botocore_config = Config(max_pool_connections=pool_size)
+        print(f"[MemoryManager] Botocore max_pool_connections={pool_size}")
+
+
+        # In-memory thread states
+        self.threads: Dict[str, ThreadState] = {}
+
+        # Use an asyncio.Lock for global operations (prevents blocking event loop)
+        self._global_lock = asyncio.Lock()
+
+        # DynamoDB table name
         self.table_name = CHAT_HISTORY_TABLE
-        
+
+        # Semaphore to bound concurrent batch writers and provide backpressure
+        self._write_semaphore = asyncio.Semaphore(max_concurrent_batch_writes)
+
+        # Track pending background tasks so we can log and await them during shutdown
+        self._pending_tasks: "set[asyncio.Task]" = set()
+        self._pending_tasks_lock = asyncio.Lock()
+
         print(f"[MemoryManager] Initialized with table: {CHAT_HISTORY_TABLE}, region: {AWS_REGION}")
         print(f"[MemoryManager] Config - Context pairs: {CONTEXT_PAIRS}, Batch pairs: {BATCH_PAIRS}, Max RAM pairs: {MAX_RAM_PAIRS}")
-        
-        # Register shutdown hook to flush all conversations
-        import atexit
-        atexit.register(self._shutdown_hook)
+        print(f"[MemoryManager] Async batch writers semaphore max: {max_concurrent_batch_writes}")
+
+        # Register atexit fallback to run shutdown synchronously if process exits
+        # Prefer framework-integrated graceful shutdown (e.g., FastAPI on_event("shutdown")).
+        atexit.register(lambda: asyncio.run(self.shutdown()))
+
     
-    def _get_thread_state(self, thread_id: str) -> ThreadState:
-        """Get or create thread state"""
-        with self._global_lock:
+    async def _ensure_thread_lock(self, thread_state: ThreadState) -> None:
+        """Ensure thread_state.lock is an asyncio.Lock. This avoids forcing a
+        change in memory_utils right away — we patch the object here if needed.
+        """
+        if not hasattr(thread_state, "lock") or not isinstance(thread_state.lock, asyncio.Lock):
+            # Replace sync locks with async locks for event-loop safety.
+            thread_state.lock = asyncio.Lock()
+
+    async def _get_thread_state(self, thread_id: str) -> ThreadState:
+        """Get or create thread state (async-safe)."""
+        # Use async global lock to avoid blocking event loop.
+        async with self._global_lock:
             if thread_id not in self.threads:
                 print(f"[MemoryManager] Creating new thread state for {thread_id}")
                 self.threads[thread_id] = ThreadState(
@@ -49,85 +109,109 @@ class MemoryManager:
                     session_id=str(uuid.uuid4()),
                     last_activity_at=time.time()
                 )
-            return self.threads[thread_id]
-    
+            ts = self.threads[thread_id]
+
+        # Ensure the ThreadState has an asyncio.Lock for per-thread operations
+        await self._ensure_thread_lock(ts)
+        return ts
+
     def _mark_activity(self, thread_state: ThreadState) -> None:
-        """Update last activity timestamp"""
+        """Update last activity timestamp (cheap, sync)."""
         thread_state.last_activity_at = time.time()
-    
+
     def _is_session_idle(self, thread_state: ThreadState) -> bool:
-        """Check if session has been idle for too long"""
+        """Check if session has been idle for too long (sync)."""
         idle_time = time.time() - thread_state.last_activity_at
         is_idle = idle_time > SESSION_IDLE_SECONDS
         if is_idle:
             print(f"[MemoryManager] Session {thread_state.thread_id} is idle ({idle_time:.0f}s > {SESSION_IDLE_SECONDS}s)")
         return is_idle
-    
-    def _evict_oldest_pair_to_batch(self, thread_state: ThreadState) -> None:
-        """Move oldest pair from context to batch buffer"""
+
+    # 
+    async def _evict_oldest_pair_to_batch(self, thread_state: ThreadState) -> None:
+        """Move oldest pair from context to batch buffer (async-safe)."""
         if thread_state.context_pairs:
             oldest_pair = thread_state.context_pairs.pop(0)
             thread_state.batch_pairs.append(oldest_pair)
             print(f"[MemoryManager] Evicted oldest pair (turn {oldest_pair.turn}) to batch for thread {thread_state.thread_id}")
-    
-    def _check_and_flush_batch(self, thread_state: ThreadState) -> None:
-        """Flush batch buffer if it reaches the limit"""
+
+    async def _check_and_flush_batch(self, thread_state: ThreadState) -> None:
+        """Flush batch buffer if it reaches the limit (schedules async writes).
+
+        We schedule the async batch writer (or await it when called from an async
+        context). This function intentionally does not block the caller for the
+        entire write; instead it schedules background work but still provides
+        backpressure via the semaphore inside `_batch_write_pairs`.
+        """
         if len(thread_state.batch_pairs) >= BATCH_PAIRS:
             print(f"[MemoryManager] Batch limit reached ({len(thread_state.batch_pairs)} pairs), flushing for thread {thread_state.thread_id}")
-            self._batch_write_pairs(thread_state.thread_id, thread_state.batch_pairs, thread_state.session_id)
+            # capture a copy of the buffer to avoid mutation races
+            pairs_to_flush = list(thread_state.batch_pairs)
             thread_state.batch_pairs.clear()
+
+            # schedule the async batch write and track the task
+            task = asyncio.create_task(self._batch_write_pairs(thread_state.thread_id, pairs_to_flush, thread_state.session_id))
+            await self._track_task(task)
             print(f"[MemoryManager] Batch cleared for thread {thread_state.thread_id}")
-    
-    def _enforce_ram_limit(self, thread_state: ThreadState) -> None:
-        """Ensure total RAM pairs don't exceed limit"""
+
+    async def _enforce_ram_limit(self, thread_state: ThreadState) -> None:
+        """Ensure total RAM pairs don't exceed limit; flush early if needed."""
         total_pairs = len(thread_state.context_pairs) + len(thread_state.batch_pairs)
         if total_pairs > MAX_RAM_PAIRS:
             print(f"[MemoryManager] RAM limit exceeded ({total_pairs} > {MAX_RAM_PAIRS}), flushing batch early for thread {thread_state.thread_id}")
-            # Flush batch early to stay within limit
-            self._batch_write_pairs(thread_state.thread_id, thread_state.batch_pairs, thread_state.session_id)
-            thread_state.batch_pairs.clear()
-    
-    def _reserve_seq_block(self, thread_id: str, count: int) -> int:
+            if thread_state.batch_pairs:
+                pairs_to_flush = list(thread_state.batch_pairs)
+                thread_state.batch_pairs.clear()
+                task = asyncio.create_task(self._batch_write_pairs(thread_state.thread_id, pairs_to_flush, thread_state.session_id))
+                await self._track_task(task)
+
+    #  DynamoDB Ops (for async) 
+    async def _reserve_seq_block(self, thread_id: str, count: int) -> int:
         """
         Atomically increments the per-thread counter by `count` and returns the
         starting seq for this block (inclusive). Requires a META row at seq=0.
+
+        Converted to async using aioboto3 so multiple concurrent reservations can
+        proceed without blocking the event loop.
         """
         if count <= 0:
             return 0
-        # ensure meta row exists
-        try:
-            self.dynamodb.put_item(
-                TableName=self.table_name,
-                Item={
-                    "thread_id": {"S": thread_id},
-                    "seq": {"N": "0"},
-                    "meta_type": {"S": "COUNTERS"},
-                    "next_seq": {"N": "0"},
-                    "next_turn": {"N": "0"},
-                },
-                ConditionExpression="attribute_not_exists(thread_id) AND attribute_not_exists(seq)",
-            )
-        except self.dynamodb.exceptions.ConditionalCheckFailedException:
-            pass  # already there
 
-        resp = self.dynamodb.update_item(
-            TableName=self.table_name,
-            Key={"thread_id": {"S": thread_id}, "seq": {"N": "0"}},
-            UpdateExpression="ADD next_seq :inc",
-            ExpressionAttributeValues={":inc": {"N": str(count)}},
-            ReturnValues="UPDATED_NEW",
-        )
+        async with self._aiosession.client('dynamodb', region_name=AWS_REGION, config=self._botocore_config) as dynamodb:
+            # ensure meta row exists (conditionally create)
+            try:
+                await dynamodb.put_item(
+                    TableName=self.table_name,
+                    Item={
+                        "thread_id": {"S": thread_id},
+                        "seq": {"N": "0"},
+                        "meta_type": {"S": "COUNTERS"},
+                        "next_seq": {"N": "0"},
+                        "next_turn": {"N": "0"},
+                    },
+                    ConditionExpression="attribute_not_exists(thread_id) AND attribute_not_exists(seq)",
+                )
+            except dynamodb.exceptions.ConditionalCheckFailedException:
+                # already exists, fine
+                pass
+
+            resp = await dynamodb.update_item(
+                TableName=self.table_name,
+                Key={"thread_id": {"S": thread_id}, "seq": {"N": "0"}},
+                UpdateExpression="ADD next_seq :inc",
+                ExpressionAttributeValues={":inc": {"N": str(count)}},
+                ReturnValues="UPDATED_NEW",
+            )
+
         end_seq = int(resp["Attributes"]["next_seq"]["N"])
         start_seq = end_seq - count + 1
         return start_seq
 
-    def _assign_seqs_for_flush(self, thread_id: str, pairs: list) -> None:
+    async def _assign_seqs_for_flush(self, thread_id: str, pairs: list) -> None:
         """
         Ensures every message in every pair has a unique seq. Mutates pairs in place.
-        Expects each pair like: {"turn": int, "user": {...}, "assistant": {...}}
-        Each inner dict can have 'seq' (int) already; only missing ones are assigned.
+        This now awaits the async `_reserve_seq_block`.
         """
-        # gather messages that need seq
         missing = []
         for p in pairs:
             if p and p.user_message and not isinstance(p.user_message.seq, int):
@@ -136,16 +220,20 @@ class MemoryManager:
                 missing.append(p.assistant_message)
         if not missing:
             return
-        start = self._reserve_seq_block(thread_id, len(missing))
+        start = await self._reserve_seq_block(thread_id, len(missing))
         for i, msg in enumerate(missing):
             msg.seq = start + i
 
-    def _batch_write_pairs(self, thread_id: str, pairs: list, session_id: str) -> None:
+    async def _batch_write_pairs(self, thread_id: str, pairs: list, session_id: str) -> None:
+        """Async batch write using aioboto3 with built-in semaphore/backoff.
+
+        This is the hot network path — keep it efficient and bounded.
+        """
         if not pairs:
             return
 
-        # ensure any missing seqs get unique values
-        self._assign_seqs_for_flush(thread_id, pairs)
+        # Ensure messages that need seqs have them assigned (async)
+        await self._assign_seqs_for_flush(thread_id, pairs)
 
         items = []
         for p in pairs:
@@ -186,59 +274,71 @@ class MemoryManager:
         # chunk <= 25 and write with retry on unprocessed
         CHUNK = 25
         i = 0
-        while i < len(items):
-            chunk = [{"PutRequest": {"Item": it}} for it in items[i:i+CHUNK]]
-            backoff = 0.5
-            while True:
-                resp = self.dynamodb.batch_write_item(RequestItems={self.table_name: chunk})
-                un = resp.get("UnprocessedItems", {}).get(self.table_name, [])
-                if not un:
-                    break
-                chunk = un
-                time.sleep(min(backoff, 4.0))
-                backoff *= 2
-            i += CHUNK
 
+        # Acquire semaphore to provide bounded concurrency to DynamoDB
+        async with self._write_semaphore:
+            async with self._aiosession.client('dynamodb', region_name=AWS_REGION, config=self._botocore_config) as dynamodb:
+                while i < len(items):
+                    chunk = [{"PutRequest": {"Item": it}} for it in items[i:i+CHUNK]]
+                    backoff = 0.5
+                    while True:
+                        resp = await dynamodb.batch_write_item(RequestItems={self.table_name: chunk})
+                        un = resp.get("UnprocessedItems", {}).get(self.table_name, [])
+                        if not un:
+                            break
+                        chunk = un
+                        await asyncio.sleep(min(backoff, 4.0))
+                        backoff *= 2
+                    i += CHUNK
 
-    def on_session_start(self, thread_id: str) -> None:
+    # high-level session APIs (async public)
+    async def on_session_start(self, thread_id: str) -> None:
         """Initialize session, handle idle timeout, and load context"""
         print(f"[MemoryManager] Starting session for thread {thread_id}")
-        thread_state = self._get_thread_state(thread_id)
-        
-        with thread_state.lock:
+        thread_state = await self._get_thread_state(thread_id)
+
+        async with thread_state.lock:
             try:
                 # Check if session has been idle
                 if self._is_session_idle(thread_state):
                     print(f"[MemoryManager] Session idle, starting fresh for thread {thread_id}")
-                    
+
                     # Flush all remaining pairs and start new session
                     print(f"[MemoryManager] Flushing all pairs before starting fresh...")
                     try:
-                        self.flush_all(thread_id)
+                        await self.flush_all(thread_id)
                         print(f"[MemoryManager] Successfully flushed all pairs")
                     except Exception as e:
                         print(f"[MemoryManager] Error during flush_all: {e}")
                         # Continue even if flush fails
-                    
+
                     thread_state.session_id = str(uuid.uuid4())
                     thread_state.context_pairs.clear()
                     thread_state.batch_pairs.clear()
                     thread_state.open_pair = None
                     print(f"[MemoryManager] Cleared session state, new session_id: {thread_state.session_id}")
-                
+
                 # Load conversation state from DynamoDB into context
                 if not thread_state.context_pairs:
                     print(f"[MemoryManager] Loading conversation state from DynamoDB for thread {thread_id}")
                     try:
-                        pairs = load_conversation_state_from_dynamodb(self.dynamodb, thread_id)
-                        thread_state.context_pairs = pairs
-                        print(f"[MemoryManager] Successfully loaded {len(pairs)} pairs from DynamoDB")
-                        
+                        # Prefer an async loader if available. If memory_utils only exposes
+                        # a sync loader, call it off the loop to avoid blocking.
+                        loader = load_conversation_state_from_dynamodb
+                        if asyncio.iscoroutinefunction(loader):
+                            pairs = await loader(self._aiosession, thread_id)
+                        else:
+                            # run blocking loader in threadpool
+                            pairs = await asyncio.to_thread(loader, self._aiosession, thread_id)
+
+                        thread_state.context_pairs = pairs or []
+                        print(f"[MemoryManager] Successfully loaded {len(thread_state.context_pairs)} pairs from DynamoDB")
+
                         # Update next_seq and next_turn based on loaded data
-                        if pairs:
-                            max_turn = max(p.turn for p in pairs)
+                        if thread_state.context_pairs:
+                            max_turn = max(p.turn for p in thread_state.context_pairs)
                             max_seq = 0
-                            for p in pairs:
+                            for p in thread_state.context_pairs:
                                 if p.user_message and isinstance(p.user_message.seq, int):
                                     max_seq = max(max_seq, p.user_message.seq)
                                 if p.assistant_message and isinstance(p.assistant_message.seq, int):
@@ -252,34 +352,37 @@ class MemoryManager:
                         print(f"[MemoryManager] Error loading conversation state: {e}")
                         # Continue with empty context if loading fails
                         thread_state.context_pairs = []
-                
+
                 self._mark_activity(thread_state)
                 print(f"[MemoryManager] Session started for thread {thread_id} with {len(thread_state.context_pairs)} pairs in context")
-                
+
             except Exception as e:
                 print(f"[MemoryManager] Critical error in on_session_start for thread {thread_id}: {e}")
                 # Ensure we don't leave the session in a broken state
                 self._mark_activity(thread_state)
                 print(f"[MemoryManager] Marked activity despite error, continuing with empty context")
-    
-    def on_session_end(self, thread_id: str) -> None:
+
+    async def on_session_end(self, thread_id: str) -> None:
         """End session and flush all remaining pairs"""
         print(f"[MemoryManager] Ending session for thread {thread_id}")
-        self.flush_all(thread_id)
-    
-    def add_user_message(self, thread_id: str, content: str) -> None:
-        """Add user message and start a new pair"""
-        thread_state = self._get_thread_state(thread_id)
-        
-        with thread_state.lock:
+        try:
+            await self.flush_all(thread_id)
+        except Exception as e:
+            print(f"[MemoryManager] Error during on_session_end flush: {e}")
+
+    async def add_user_message(self, thread_id: str, content: str) -> None:
+        """Add user message and start a new pair (async-safe)."""
+        thread_state = await self._get_thread_state(thread_id)
+
+        async with thread_state.lock:
             self._mark_activity(thread_state)
-            
+
             # Get sequence and turn numbers
-            seq = thread_state.next_seq
-            thread_state.next_seq += 1
-            
-            turn = thread_state.next_turn
-            
+            seq = getattr(thread_state, "next_seq", 0)
+            thread_state.next_seq = seq + 1
+
+            turn = getattr(thread_state, "next_turn", 0)
+
             # Create user message
             user_message = Message(
                 role="user",
@@ -288,25 +391,25 @@ class MemoryManager:
                 seq=seq,
                 turn=turn
             )
-            
+
             # Create new open pair
             thread_state.open_pair = Pair(turn=turn, user_message=user_message)
             print(f"[MemoryManager] Added user message for thread {thread_id}, turn {turn}, seq {seq}")
-    
-    def add_assistant_message(self, thread_id: str, content: str) -> None:
-        """Add assistant message and close the current pair"""
-        thread_state = self._get_thread_state(thread_id)
-        
-        with thread_state.lock:
+
+    async def add_assistant_message(self, thread_id: str, content: str) -> None:
+        """Add assistant message and close the current pair (async-safe)."""
+        thread_state = await self._get_thread_state(thread_id)
+
+        async with thread_state.lock:
             self._mark_activity(thread_state)
-            
+
             if not thread_state.open_pair:
                 raise ValueError("No open pair to close with assistant message")
-            
+
             # Get sequence number
-            seq = thread_state.next_seq
-            thread_state.next_seq += 1
-            
+            seq = getattr(thread_state, "next_seq", 0)
+            thread_state.next_seq = seq + 1
+
             # Create assistant message
             assistant_message = Message(
                 role="assistant",
@@ -315,83 +418,86 @@ class MemoryManager:
                 seq=seq,
                 turn=thread_state.open_pair.turn
             )
-            
+
             # Complete the pair
             thread_state.open_pair.assistant_message = assistant_message
             completed_pair = thread_state.open_pair
             thread_state.open_pair = None
-            
+
             # Move to next turn
-            thread_state.next_turn += 1
-            
+            thread_state.next_turn = getattr(thread_state, "next_turn", 0) + 1
+
             # Add to context
             thread_state.context_pairs.append(completed_pair)
             print(f"[MemoryManager] Completed pair for thread {thread_id}, turn {completed_pair.turn}")
             print(f"[MemoryManager] Context now has {len(thread_state.context_pairs)} pairs")
-            
+
             # Evict oldest pair if context exceeds limit
             if len(thread_state.context_pairs) > CONTEXT_PAIRS:
-                self._evict_oldest_pair_to_batch(thread_state)
-            
+                await self._evict_oldest_pair_to_batch(thread_state)
+
             # Check if batch needs flushing
-            self._check_and_flush_batch(thread_state)
-            
+            await self._check_and_flush_batch(thread_state)
+
             # Enforce RAM limit
-            self._enforce_ram_limit(thread_state)
-    
-    def get_context_for_llm(self, thread_id: str) -> List[Dict[str, str]]:
+            await self._enforce_ram_limit(thread_state)
+
+    async def get_context_for_llm(self, thread_id: str) -> List[Dict[str, str]]:
         """Get flattened context for LLM (last 15 pairs)"""
-        thread_state = self._get_thread_state(thread_id)
-        
-        with thread_state.lock:
+        thread_state = await self._get_thread_state(thread_id)
+
+        async with thread_state.lock:
             messages = []
-            
+
             # Add context pairs
             for pair in thread_state.context_pairs:
                 messages.extend(pair.to_messages())
-            
+
             # Add open pair user message if exists
             if thread_state.open_pair:
                 messages.append({
                     "role": thread_state.open_pair.user_message.role,
                     "content": thread_state.open_pair.user_message.content
                 })
-            
+
             print(f"[MemoryManager] Generated {len(messages)} messages for LLM context (thread {thread_id})")
             return messages
-    
-    def flush_batch(self, thread_id: str) -> None:
+
+    async def flush_batch(self, thread_id: str) -> None:
         """Flush batch buffer to DynamoDB"""
-        thread_state = self._get_thread_state(thread_id)
-        
-        with thread_state.lock:
+        thread_state = await self._get_thread_state(thread_id)
+
+        async with thread_state.lock:
             if thread_state.batch_pairs:
                 print(f"[MemoryManager] Manually flushing {len(thread_state.batch_pairs)} pairs from batch for thread {thread_id}")
-                self._batch_write_pairs(thread_id, thread_state.batch_pairs, thread_state.session_id)
+                pairs_to_flush = list(thread_state.batch_pairs)
                 thread_state.batch_pairs.clear()
+                task = asyncio.create_task(self._batch_write_pairs(thread_id, pairs_to_flush, thread_state.session_id))
+                await self._track_task(task)
             else:
                 print(f"[MemoryManager] No pairs in batch to flush for thread {thread_id}")
-    
-    def flush_all(self, thread_id: str) -> None:
+
+    async def flush_all(self, thread_id: str) -> None:
         """Flush all pairs (context + batch) to DynamoDB"""
-        thread_state = self._get_thread_state(thread_id)
-        
-        with thread_state.lock:
+        thread_state = await self._get_thread_state(thread_id)
+
+        async with thread_state.lock:
             # Collect all pairs to flush
             all_pairs = thread_state.context_pairs.copy()
             all_pairs.extend(thread_state.batch_pairs)
-            
+
             # Add open pair if it exists and is complete
             if thread_state.open_pair and thread_state.open_pair.is_complete:
                 all_pairs.append(thread_state.open_pair)
-            
+
             # Flush to DynamoDB
             if all_pairs:
                 print(f"[MemoryManager] Flushing all {len(all_pairs)} pairs for thread {thread_id}")
-                self._batch_write_pairs(thread_id, all_pairs, thread_state.session_id)
+                task = asyncio.create_task(self._batch_write_pairs(thread_id, all_pairs, thread_state.session_id))
+                await self._track_task(task)
             else:
                 print(f"[MemoryManager] No pairs to flush for thread {thread_id}")
-            
+
             # Clear all RAM state
             context_count = len(thread_state.context_pairs)
             batch_count = len(thread_state.batch_pairs)
@@ -399,22 +505,19 @@ class MemoryManager:
             thread_state.batch_pairs.clear()
             thread_state.open_pair = None
             print(f"[MemoryManager] Cleared RAM state: {context_count} context + {batch_count} batch pairs for thread {thread_id}")
-    
-    def prime_inmemorysaver(self, thread_id: str, graph) -> None:
+
+    async def prime_inmemorysaver(self, thread_id: str, graph) -> None:
         """
         Prime InMemorySaver with last 15 pairs converted to LangChain messages.
         This ensures the graph state has consistent recent history after restarts.
-        
-        Note: This is a best-effort operation. If it fails, the system continues to work
-        but InMemorySaver won't have the historical context until the first new interaction.
         """
-        thread_state = self._get_thread_state(thread_id)
-        
-        with thread_state.lock:
+        thread_state = await self._get_thread_state(thread_id)
+
+        async with thread_state.lock:
             if not thread_state.context_pairs:
                 print(f"[MemoryManager] No context pairs to prime InMemorySaver for thread {thread_id}")
                 return
-            
+
             try:
                 # Convert pairs to LangChain messages
                 langchain_messages = []
@@ -425,39 +528,79 @@ class MemoryManager:
                 # when the next real interaction happens
                 if langchain_messages:
                     print(f"[MemoryManager] Priming InMemorySaver with {len(langchain_messages)} messages for thread {thread_id}")
-                
+
             except Exception as e:
                 print(f"[MemoryManager] Warning: Could not prime InMemorySaver for thread {thread_id}: {e}")
-    
-    def _shutdown_hook(self):
-        """Save conversations to DynamoDB on shutdown"""
-        try:
-            start_time = time.time()
-            timeout_seconds = 30
 
-            # Snapshot thread ids OUTSIDE any long operation
-            with self._global_lock:
-                thread_ids = list(self.threads.keys())
+    # Background task handling utils
+    # transformed _shutdown_hook 
+    async def _track_task(self, task: asyncio.Task) -> None:
+        """Add task to pending set and attach a callback to remove/log on completion."""
+        async with self._pending_tasks_lock:
+            self._pending_tasks.add(task)
 
-            print(f"[MemoryManager] Shutdown: Flushing {len(thread_ids)} active threads")
-
-            # Flush each thread WITHOUT holding the global lock
-            for i, thread_id in enumerate(thread_ids, 1):
-                elapsed = time.time() - start_time
-                if elapsed > timeout_seconds:
-                    print(f"[MemoryManager] Shutdown timeout reached after {elapsed:.1f}s, stopping flush")
-                    break
+        def _on_done(t: asyncio.Task):
+            # remove from pending set and log exceptions
+            async def _remove():
+                async with self._pending_tasks_lock:
+                    self._pending_tasks.discard(t)
                 try:
-                    self.flush_all(thread_id)
-                    if i % 10 == 0:  # Log progress every 10 threads
-                        print(f"[MemoryManager] Shutdown: Flushed {i}/{len(thread_ids)} threads")
-                except Exception as e:
-                    print(f"[MemoryManager] Error saving thread {thread_id} during shutdown: {e}")
+                    exc = t.exception()
+                    if exc:
+                        print(f"[MemoryManager] Background task failed: {exc}")
+                except asyncio.CancelledError:
+                    pass
 
-            print(f"[MemoryManager] Shutdown complete in {time.time() - start_time:.1f}s")
+            asyncio.create_task(_remove())
 
+        task.add_done_callback(_on_done)
+
+    # graceful shutdown 
+    async def shutdown(self) -> None:
+        """Gracefully flush pending work and wait for background tasks to complete.
+
+        Call this from application shutdown (e.g., FastAPI on_event("shutdown")).
+        The atexit fallback will run this synchronously if the process exits.
+        """
+        print("[MemoryManager] Shutdown initiated — flushing all threads and awaiting background tasks")
+        start_time = time.time()
+        timeout_seconds = 30
+
+        # snapshot thread ids without holding long locks
+        async with self._global_lock:
+            thread_ids = list(self.threads.keys())
+
+        # schedule flush for all threads
+        flush_tasks = []
+        for tid in thread_ids:
+            flush_tasks.append(asyncio.create_task(self.flush_all(tid)))
+
+        # wait for flush tasks with timeout
+        try:
+            await asyncio.wait_for(asyncio.gather(*flush_tasks), timeout=timeout_seconds)
         except Exception as e:
-            print(f"[MemoryManager] Critical error during shutdown: {e}")
+            print(f"[MemoryManager] Warning: timeout or error while flushing during shutdown: {e}")
+
+        # wait for pending background tasks to finish (short grace)
+        async with self._pending_tasks_lock:
+            pending_copy = list(self._pending_tasks)
+
+        if pending_copy:
+            try:
+                await asyncio.wait_for(asyncio.gather(*pending_copy, return_exceptions=True), timeout=10)
+            except Exception as e:
+                print(f"[MemoryManager] Warning: pending background tasks did not finish: {e}")
+
+        print(f"[MemoryManager] Shutdown complete in {time.time() - start_time:.1f}s")
+
+    # sync-compat helper 
+    def run_sync(self, coro):
+        """Compatibility helper: run an async coroutine synchronously if needed.
+
+        Use sparingly — in production under an async server you should call async
+        APIs directly. This exists to ease incremental migration.
+        """
+        return asyncio.run(coro)
 
 
 # Global instance
