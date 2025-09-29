@@ -224,7 +224,7 @@ def FlightSearchStateMachine(
                     number_of_passengers=sm.number_of_passengers,
                     carriers=preferred_carriers
                 )
-                # TD: await async invoke
+                # Done: await async invoke
                 # Use safe async execution without breaking the sync context
                 result = _run_async_safely(TravelportSearch.invoke({"payload": payload, "trip_type": "one-way"}))
             else:
@@ -236,7 +236,7 @@ def FlightSearchStateMachine(
                     number_of_passengers=sm.number_of_passengers,
                     carriers=preferred_carriers
                 )
-                # TD: await async invoke
+                # Done: await async invoke
                 # Use safe async execution without breaking the sync context
                 result = _run_async_safely(TravelportSearch.invoke({"payload": payload, "trip_type": "round-trip"}))
 

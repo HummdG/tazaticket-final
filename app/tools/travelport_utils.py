@@ -27,7 +27,7 @@ import time
 from queue import Queue
 import calendar
 
-# TD: aiohttp is used for connection pooling with Twilio Async client
+# Done: aiohttp is used for connection pooling with Twilio Async client
 try:
     import aiohttp
     from aiohttp import TCPConnector
@@ -712,7 +712,7 @@ def extract_return_duration(user_input: str) -> Optional[int]:
     return None
 
 # ------------------------------
-# Travelport invoke helpers (TD: kept internal, but works with both sync/async invoke)
+# Travelport invoke helpers (Done: kept internal, but works with both sync/async invoke)
 # ------------------------------
 def _invoke_travelport_sync(payload: Dict[str, Any], trip_type: str = "one-way") -> Dict[str, Any]:
     try:
@@ -913,7 +913,7 @@ def bulk_search_cheapest_sync(origin: str, destination: str, dates: List[str],
         "search_summary": f"Searched {len(dates)} dates, found {len(valid_results)} valid options"
     }
 
-# TD: Keep original function name alias so existing code that calls 'bulk_search_cheapest' won't break
+# Done: Keep original function name alias so existing code that calls 'bulk_search_cheapest' won't break
 def bulk_search_cheapest(*args, **kwargs):
     """
     Backwards-compatible alias: calls the sync bulk search (sequential).
@@ -990,7 +990,7 @@ def queue_bulk_search_task(task_func: Callable, *args, **kwargs):
     print("[BulkSearch] Task queued for background processing")
 
 # ------------------------------
-# Twilio async client with connection pooling (TD: reusable)
+# Twilio async client with connection pooling (Done: reusable)
 # ------------------------------
 _twilio_client = None
 _twilio_http_session = None
@@ -998,7 +998,7 @@ _twilio_http_session = None
 def _get_twilio_client():
     """
     Return a reusable Twilio client configured with AsyncTwilioHttpClient when available.
-    TD: Uses aiohttp TCPConnector with env-configured limits for connection pooling.
+    Done: Uses aiohttp TCPConnector with env-configured limits for connection pooling.
     """
     global _twilio_client, _twilio_http_session
     if _twilio_client is not None:
@@ -1155,7 +1155,6 @@ def execute_bulk_search_background(**kwargs):
       - origin, destination, dates (list), number_of_passengers, carriers, trip_type
       - notify_thread_id (optional): where to send results (whatsapp thread id)
       - store_if_no_contact (optional): whether to store pending messages instead of sending
-    TD: This function was restored exactly (but flexible signature to be compatible).
     """
     try:
         origin = kwargs.get("origin") or kwargs.get("from") or kwargs.get("orig")

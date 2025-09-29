@@ -38,7 +38,7 @@ class TranslationService:
             Language code (e.g., 'en', 'ur', 'es', 'fr', etc.) or 'en' as fallback
         """
         try:
-            # TD: async client using httpx/aiohttp
+            # Done: async client using httpx/aiohttp
             response = await self.client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
@@ -78,7 +78,7 @@ class TranslationService:
             return text  # Already in English
         
         try:
-            # TD: async await create
+            # Done: async await create
             response = await self.client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[

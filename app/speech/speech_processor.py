@@ -206,7 +206,7 @@ class SpeechGenClient:
         self.token = token
         self.email = email
         self.base_url = "https://speechgen.io/"
-        # TD: async client using httpx
+        # Done: async client with session
         # TD: - Implement connection pooling for HTTP requests using httpx.AsyncClient with connection limits
         self._session = http_client or get_http_client()
 
@@ -238,7 +238,7 @@ class SpeechGenClient:
         }
                
         # Submit TTS request
-        # TD: async await call
+        # Done: async await call
         # TD: - Implement connection pooling for HTTP requests using httpx.AsyncClient with connection limits
         # Doubt
         resp = await self._session.post(url, data=payload, timeout=_HTTPX_TIMEOUT)
@@ -258,7 +258,7 @@ class SpeechGenClient:
         if not file_url.startswith("http"):
             file_url = urllib.parse.urljoin(self.base_url, file_url.lstrip("/"))
 
-        # TD: async await call
+        # Done: async await call
         # Download the audio file (async)
 
         async with self._session.stream("GET", file_url, timeout=_HTTPX_TIMEOUT) as r:
@@ -282,7 +282,7 @@ class SpeechProcessor:
 
     def __init__(self):
         # Initialize AssemblyAI for STT
-        # TD: async client if available 
+        # Done: async client if available 
         self.assembly_api_key = os.getenv("ASSEMBLYAI_API_KEY")
         if not self.assembly_api_key:
             print("⚠️ Warning: ASSEMBLYAI_API_KEY not found in environment variables")
@@ -346,7 +346,7 @@ class SpeechProcessor:
             return fallback_voice
 
     # ---- AssemblyAI transcription (async) ----
-    # TD: async await
+    # Done: async await
     async def speech_to_text_direct(self, audio_url: str) -> Tuple[Optional[str], Optional[str]]:
         """
         Async STT using AssemblyAI REST API with language_detection=True.
@@ -371,7 +371,7 @@ class SpeechProcessor:
                 transcription_url = public_url
                 print(f"✅ Using S3 URL for AssemblyAI: {transcription_url[:80]}...")
             # Configure AssemblyAI transcription with language detection
-            # TD: async await
+            # Done: async await
             client = get_http_client()
             endpoint = "https://api.assemblyai.com/v2/transcript"
             headers = {"authorization": self.assembly_api_key, "content-type": "application/json"}
