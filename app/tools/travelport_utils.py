@@ -761,6 +761,10 @@ def parse_date_range(user_input: str, departure_date: Optional[str] = None) -> T
     user_input_lower = user_input.lower()
     today = datetime.now().date()
     
+    # Initialize dates list and bulk flag
+    dates = []
+    is_bulk = False
+    
     # Single date patterns - not bulk search
     single_date_patterns = [
         r'on \d{4}-\d{2}-\d{2}',
@@ -833,9 +837,6 @@ def parse_date_range(user_input: str, departure_date: Optional[str] = None) -> T
         'next month': ('next_month', None),
         'this month': ('this_month', None),
     }
-    
-    dates = []
-    is_bulk = False
     
     # Check for month patterns
     for pattern, (period_type, month_num) in bulk_patterns.items():
