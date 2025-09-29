@@ -119,7 +119,7 @@ def format_layovers(itinerary: dict) -> str:
 
 
 @tool("FlightSearchStateMachine")
-async def FlightSearchStateMachine(
+def FlightSearchStateMachine(
     origin: Optional[str] = None,
     destination: Optional[str] = None,
     departure_date: Optional[str] = None,
@@ -225,7 +225,8 @@ async def FlightSearchStateMachine(
                     carriers=preferred_carriers
                 )
                 # TD: await async invoke
-                result = await TravelportSearch.invoke({"payload": payload, "trip_type": "one-way"})
+                # Use safe async execution without breaking the sync context
+                result = _run_async_safely(TravelportSearch.invoke({"payload": payload, "trip_type": "one-way"}))
             else:
                 payload = RoundTripFlightSearch(
                     origin=sm.origin,
@@ -236,7 +237,8 @@ async def FlightSearchStateMachine(
                     carriers=preferred_carriers
                 )
                 # TD: await async invoke
-                result = await TravelportSearch.invoke({"payload": payload, "trip_type": "round-trip"})
+                # Use safe async execution without breaking the sync context
+                result = _run_async_safely(TravelportSearch.invoke({"payload": payload, "trip_type": "round-trip"}))
 
             if result.get("ok"):
                 summary = result.get("summary")
@@ -247,12 +249,9 @@ async def FlightSearchStateMachine(
                         outbound = summary.get("outbound", {})
                         inbound = summary.get("inbound", {})
                         
-                        response = f"✈️ Round-trip flight found: {price['total']} {price['currency']}\n\n"
-                        return {
-                            "text": response,           # unchanged human text for the LLM
-                            "summary": summary,         # structured data your formatter needs
-                            "trip_type": sm.type_of_trip
-                        }
+                        # Initialize response for round-trip
+                        response = f"✈️ Round-trip flight found: {summary['price_total']} {summary['currency']}\n"
+                        
                         if outbound:
                             duration = format_duration(outbound.get("duration_minutes_total"))
                             stops = format_stops(outbound.get("stops_total", 0))
@@ -272,6 +271,7 @@ async def FlightSearchStateMachine(
                             lf = format_layovers(inbound.get("itinerary"))
                             if lf:
                                 response += lf
+                        
                         # Reset state machine after successful search
                         state_machines[thread_id] = ConversationFlowSM()
                         return response
@@ -313,6 +313,24 @@ async def FlightSearchStateMachine(
     else:
         missing = sm.get_missing_variables()
         return f"Flight search in progress. Still need: {', '.join(missing)}. Please provide these details to continue."
+
+
+def _run_async_safely(awaitable):
+    """
+    Run an awaitable safely whether inside or outside an event loop.
+    """
+    try:
+        # Check if we're already inside a running event loop
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # No running event loop, safe to use asyncio.run()
+        return asyncio.run(awaitable)
+    else:
+        # Inside a running event loop, run the coroutine in a separate thread
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(asyncio.run, awaitable)
+            return future.result()
 
 
 @tool("BulkFlightSearch")

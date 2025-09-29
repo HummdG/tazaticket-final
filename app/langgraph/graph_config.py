@@ -172,13 +172,13 @@ def invoke_graph(graph, user_message: str, thread_id: str = "default", is_voice:
     print(f"[GraphConfig] Set global thread_id to: {_current_thread_id}")
     
     # Initialize session and load context from DynamoDB
-    memory_manager.on_session_start(thread_id)
+    _run_async_safely(memory_manager.on_session_start(thread_id))
     
     # Add user message to memory manager (starts new pair)
-    memory_manager.add_user_message(thread_id, user_message)
+    _run_async_safely(memory_manager.add_user_message(thread_id, user_message))
     
     # Get context for LLM (flattened pairs)
-    context_messages = memory_manager.get_context_for_llm(thread_id)
+    context_messages = _run_async_safely(memory_manager.get_context_for_llm(thread_id))
     print(f"[GraphConfig] Using {len(context_messages)} context messages for LLM")
     
     # Convert context to LangChain messages for the graph
@@ -213,11 +213,29 @@ def invoke_graph(graph, user_message: str, thread_id: str = "default", is_voice:
     assistant_text = extract_last_ai_text(state)
     if assistant_text:
         print(f"[GraphConfig] Adding assistant response to memory: '{assistant_text[:50]}...'")
-        memory_manager.add_assistant_message(thread_id, assistant_text)
+        _run_async_safely(memory_manager.add_assistant_message(thread_id, assistant_text))
     else:
         print("[GraphConfig] Warning: No assistant response extracted from state")
     
     return state
+
+
+def _run_async_safely(awaitable):
+    """
+    Run an awaitable safely whether inside or outside an event loop.
+    """
+    try:
+        # Check if we're already inside a running event loop
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # No running event loop, safe to use asyncio.run()
+        return asyncio.run(awaitable)
+    else:
+        # Inside a running event loop, run the coroutine in a separate thread
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(asyncio.run, awaitable)
+            return future.result()
 
 
 def extract_last_ai_text(state: dict) -> str:

@@ -429,10 +429,13 @@ class SpeechProcessor:
             Path to the generated audio file or None if error
         """
         try:
-            return asyncio.run(self.speech_to_text_direct(audio_url))
+            # Check if there's already a running event loop
+            loop = asyncio.get_running_loop()
+            # If we're in a running loop, schedule and wait for the result
+            return loop.run_until_complete(self.speech_to_text_direct(audio_url))
         except RuntimeError:
-            # event loop running — run coroutine in a fresh thread loop
-            return _run_coro_in_thread(self.speech_to_text_direct(audio_url))
+            # No running event loop, safe to use asyncio.run()
+            return asyncio.run(self.speech_to_text_direct(audio_url))
 
     # ---- TTS pipeline (async) ----
     async def text_to_speech_async(self, text: str, detected_language: str = "en") -> Optional[str]:
@@ -477,9 +480,13 @@ class SpeechProcessor:
     # ---- sync wrapper for compatibility ----
     def text_to_speech(self, text: str, detected_language: str = "en") -> Optional[str]:
         try:
-            return asyncio.run(self.text_to_speech_async(text, detected_language))
+            # Check if there's already a running event loop
+            loop = asyncio.get_running_loop()
+            # If we're in a running loop, schedule and wait for the result
+            return loop.run_until_complete(self.text_to_speech_async(text, detected_language))
         except RuntimeError:
-            return _run_coro_in_thread(self.text_to_speech_async(text, detected_language))
+            # No running event loop, safe to use asyncio.run()
+            return asyncio.run(self.text_to_speech_async(text, detected_language))
 
     def is_configured(self) -> bool:
         return bool(os.getenv("OPENAI_API_KEY"))

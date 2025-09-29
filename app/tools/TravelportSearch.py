@@ -28,6 +28,17 @@ def _get_shared_client() -> httpx.AsyncClient:
         _shared_client = httpx.AsyncClient(limits=_limits, timeout=_default_timeout)
     return _shared_client
 
+def run_async(coro):
+    """Run async code safely from sync context, avoiding nested loop crashes."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # No event loop running → safe to use asyncio.run
+        return asyncio.run(coro)
+    else:
+        # Already inside async loop → schedule and wait
+        return loop.run_until_complete(coro)
+
 async def fetch_password_token(CLIENT_ID, CLIENT_SECRET, USERNAME, PASSWORD, OAUTH_URL):
     """Async helper to fetch OAuth password token"""
     data = {
@@ -71,7 +82,7 @@ def TravelportSearch(payload: dict, trip_type: str = "one-way"):
 
     # Step 1: Get token
     try:
-        token = asyncio.run(fetch_password_token(CLIENT_ID, CLIENT_SECRET, USERNAME, PASSWORD, OAUTH_URL))
+        token = run_async(fetch_password_token(CLIENT_ID, CLIENT_SECRET, USERNAME, PASSWORD, OAUTH_URL))
     except httpx.HTTPError as e:
         return {
             "ok": False,
@@ -98,7 +109,7 @@ def TravelportSearch(payload: dict, trip_type: str = "one-way"):
 
     # Step 2: Call catalog
     try:
-        resp_json = asyncio.run(fetch_catalog(CATALOG_URL, headers, payload))
+        resp_json = run_async(fetch_catalog(CATALOG_URL, headers, payload))
 
         # Extract summary
         if trip_type == "one-way":

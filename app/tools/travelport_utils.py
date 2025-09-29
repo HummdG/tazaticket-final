@@ -725,7 +725,13 @@ def _invoke_travelport_sync(payload: Dict[str, Any], trip_type: str = "one-way")
         raise RuntimeError("TravelportSearch.invoke missing")
 
     if inspect.iscoroutinefunction(invoke):
-        return asyncio.run(invoke({"payload": payload, "trip_type": trip_type}))
+        try:
+            loop = asyncio.get_running_loop()
+            # If we're in a running loop, schedule and wait for the result
+            return loop.run_until_complete(invoke({"payload": payload, "trip_type": trip_type}))
+        except RuntimeError:
+            # No running event loop, safe to use asyncio.run()
+            return asyncio.run(invoke({"payload": payload, "trip_type": trip_type}))
     else:
         return invoke({"payload": payload, "trip_type": trip_type})
 
