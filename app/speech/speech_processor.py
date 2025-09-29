@@ -207,7 +207,7 @@ class SpeechGenClient:
         self.email = email
         self.base_url = "https://speechgen.io/"
         # Done: async client with session
-        # TD: - Implement connection pooling for HTTP requests using httpx.AsyncClient with connection limits
+        # Done: - Implement connection pooling for HTTP requests using httpx.AsyncClient with connection limits
         self._session = http_client or get_http_client()
 
     async def get_voices(self, langs: Optional[list] = None) -> Dict[str, Any]:
@@ -239,7 +239,7 @@ class SpeechGenClient:
                
         # Submit TTS request
         # Done: async await call
-        # TD: - Implement connection pooling for HTTP requests using httpx.AsyncClient with connection limits
+        # Done: - Implement connection pooling for HTTP requests using httpx.AsyncClient with connection limits
         # Doubt
         resp = await self._session.post(url, data=payload, timeout=_HTTPX_TIMEOUT)
         resp.raise_for_status()

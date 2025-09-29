@@ -17,7 +17,7 @@ except ImportError:
         extract_cheapest_round_trip_summary
     )
 
-# TD: create a shared httpx.AsyncClient for pooling
+# Done: create a shared httpx.AsyncClient for pooling
 _limits = httpx.Limits(max_connections=20, max_keepalive_connections=10)  # tune as needed
 _default_timeout = httpx.Timeout(10.0, read=30.0)  # adjust
 _shared_client: Optional[httpx.AsyncClient] = None

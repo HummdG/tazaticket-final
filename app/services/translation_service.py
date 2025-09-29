@@ -17,7 +17,7 @@ class TranslationService:
             print("⚠️ Warning: OPENAI_API_KEY not found in environment variables")
 
         # Create a single Google Translate async client to reuse connectioons
-        # TD: reuse client for pooling
+        # Done: reuse client for pooling
         try:
             # TranslationServiceAsyncClient uses grpc_asyncio transport by default.
             self.gcloud_client = translate.TranslationServiceAsyncClient()
