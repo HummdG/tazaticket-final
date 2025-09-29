@@ -93,6 +93,44 @@ class ConversationFlowSM:
         
         return missing
     
+    def get_intelligent_follow_up_question(self):
+        """Generate intelligent follow-up questions based on missing information"""
+        missing = self.get_missing_variables()
+        
+        if not missing:
+            return None
+            
+        # Prioritize questions by importance and user experience
+        if 'origin' in missing:
+            return "Where would you like to depart from? Please specify the city or airport (for example: Lahore, Karachi, London, or airport code like LHE)."
+            
+        if 'destination' in missing:
+            return "Where would you like to travel to? Please specify the city or airport (for example: Athens, Dubai, or airport code like ATH)."
+            
+        if 'departure_date' in missing:
+            return "When would you like to depart? You can tell me a specific date (like November 10th) or a time period (like next month, first week of May)."
+            
+        if 'type_of_trip' in missing:
+            return "Would you like a one-way ticket or a round-trip ticket?"
+            
+        if 'return_date' in missing and self.type_of_trip == "round-trip":
+            return "When would you like to return? You can specify a date or duration (like 'after 2 weeks', '1 month later')."
+            
+        if 'number_of_passengers' in missing:
+            return "How many passengers will be traveling?"
+            
+        # Default fallback
+        missing_readable = []
+        for var in missing:
+            if var == 'detected_language' or var == 'mode_of_conversation':
+                continue  # Skip technical variables
+            missing_readable.append(var.replace('_', ' '))
+            
+        if missing_readable:
+            return f"I still need information about: {', '.join(missing_readable)}. Could you please provide these details?"
+        
+        return None
+    
     def status(self):
         """Print current status"""
         print(f"\n--- Travel Booking Status ---")

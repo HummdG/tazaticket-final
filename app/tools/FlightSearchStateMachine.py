@@ -39,10 +39,32 @@ def get_or_create_state_machine(thread_id: str) -> ConversationFlowSM:
 def resolve_city_to_iata(city_input: str) -> str:
     """
     Convert natural language city names to IATA codes using city_codes.py
-    Returns the preferred IATA code or the original input if no match found
+    Returns the preferred IATA code or the original input if no match found.
+    For ambiguous country-level queries, returns empty string to trigger follow-up questions.
     """
     if not city_input:
         return city_input
+    
+    city_lower = city_input.lower().strip()
+    
+    # Check for country-level ambiguous queries that need clarification
+    ambiguous_countries = {
+        'pakistan': ['LHE', 'KHI', 'ISB', 'SKT', 'PEW', 'MUX', 'UET'],
+        'greece': ['ATH'], 
+        'uk': ['LON', 'LHR', 'LGW', 'MAN', 'BHX'],
+        'united kingdom': ['LON', 'LHR', 'LGW', 'MAN', 'BHX'],
+        'turkey': ['IST', 'SAW'],
+        'uae': ['DXB', 'AUH'],
+        'united arab emirates': ['DXB', 'AUH'],
+        'usa': ['NYC', 'LAX', 'CHI', 'MIA'],
+        'united states': ['NYC', 'LAX', 'CHI', 'MIA'],
+        'india': ['DEL', 'BOM']
+    }
+    
+    # If it's a country-level query, return empty to trigger intelligent follow-up
+    if city_lower in ambiguous_countries:
+        print(f"[CityMapper] '{city_input}' is ambiguous country-level query, needs clarification")
+        return ""
     
     # Try to resolve the phrase to airport codes
     preferred_code, all_codes = resolve_phrase_to_airports(city_input)
@@ -179,12 +201,44 @@ def FlightSearchStateMachine(
     # Parse carrier preference from user input
     preferred_carriers = parse_carrier_preference(user_input_text) if user_input_text else DEFAULT_PREFERRED_CARRIERS
     
+    # Try to extract dates from flexible natural language if not provided
+    if not departure_date and not return_date and user_input_text:
+        from .travelport_utils import parse_flexible_dates
+        parsed_dep, parsed_ret = parse_flexible_dates(user_input_text)
+        if parsed_dep and not departure_date:
+            departure_date = parsed_dep
+            print(f"[FlexDateParser] Extracted departure date: {departure_date}")
+        if parsed_ret and not return_date:
+            return_date = parsed_ret
+            print(f"[FlexDateParser] Extracted return date: {return_date}")
+    
+    # Check for layover/stopover requirements
+    layover_requirements = None
+    if user_input_text:
+        from .travelport_utils import parse_layover_requirements
+        layover_requirements = parse_layover_requirements(user_input_text)
+        if layover_requirements:
+            print(f"[LayoverParser] Detected layover requirement: {layover_requirements}")
+            
+            # Store layover requirements in state machine for future reference
+            sm.set_variable('layover_requirements', layover_requirements)
+            
+            # Inform user about layover handling  
+            if layover_requirements.get('type') == 'stopover':
+                return f"I understand you want a {layover_requirements['duration_days']}-day stopover in {layover_requirements['location']}. Please note that this requires booking separate tickets - one to {layover_requirements['location']} and another from {layover_requirements['location']} to your final destination. This allows you to stay and explore during your stopover. Would you like me to help you search for these separate flights?"
+            elif layover_requirements.get('preference'):
+                return f"I note your preference for flights via {layover_requirements['location']}. I'll prioritize routes that connect through this city when showing you flight options."
+    
     # Update provided fields with city-to-IATA mapping
     if origin:
         iata_origin = resolve_city_to_iata(origin)
+        if iata_origin == "":  # Ambiguous location detected
+            return f"I need more specific information about your departure location. You mentioned '{origin}' - could you please specify which airport? For example:\n• If Pakistan: Lahore (LHE), Karachi (KHI), Islamabad (ISB), Sialkot (SKT), or other cities\n• If another location: please specify the city or airport code"
         sm.set_variable('origin', iata_origin)
     if destination:
         iata_destination = resolve_city_to_iata(destination)
+        if iata_destination == "":  # Ambiguous location detected
+            return f"I need more specific information about your destination. You mentioned '{destination}' - could you please specify which airport or city? For example:\n• If Pakistan: Lahore (LHE), Karachi (KHI), Islamabad (ISB), Sialkot (SKT)\n• If Greece: Athens (ATH)\n• If another location: please specify the city or airport code"
         sm.set_variable('destination', iata_destination)
     if departure_date:
         corrected_departure = fix_date_year(departure_date)
@@ -242,12 +296,16 @@ def FlightSearchStateMachine(
                         outbound = summary.get("outbound", {})
                         inbound = summary.get("inbound", {})
                         
-                        response = f"✈️ Round-trip flight found: {price['total']} {price['currency']}\n\n"
-                        return {
-                            "text": response,           # unchanged human text for the LLM
-                            "summary": summary,         # structured data your formatter needs
-                            "trip_type": sm.type_of_trip
-                        }
+                        # Check flight quality (prefer fewer stops)
+                        total_stops = (outbound.get("stops_total", 0) + inbound.get("stops_total", 0))
+                        quality_note = ""
+                        if total_stops == 0:
+                            quality_note = " ⭐ Direct flights!"
+                        elif total_stops <= 2:
+                            quality_note = " ✈️ Good connections"
+                        
+                        response = f"✈️ Round-trip flight found: {price['total']} {price['currency']}{quality_note}\n\n"
+                        
                         if outbound:
                             duration = format_duration(outbound.get("duration_minutes_total"))
                             stops = format_stops(outbound.get("stops_total", 0))
@@ -267,6 +325,11 @@ def FlightSearchStateMachine(
                             lf = format_layovers(inbound.get("itinerary"))
                             if lf:
                                 response += lf
+                        
+                        # Add user preference note
+                        if total_stops > 2:
+                            response += f"\n💡 Tip: This route has {total_stops} stops. Let me know if you'd prefer options with fewer connections."
+                        
                         # Reset state machine after successful search
                         state_machines[thread_id] = ConversationFlowSM()
                         return response
@@ -275,9 +338,17 @@ def FlightSearchStateMachine(
                         price_text = f"{price.get('total')} {price.get('currency')}" if price.get('total') else "Price not available"
                         
                         duration = format_duration(summary.get("duration_minutes_total"))
-                        stops = format_stops(summary.get("stops_total", 0))
+                        stops_total = summary.get("stops_total", 0)
+                        stops = format_stops(stops_total)
                         
-                        response = f"✈️ One-way flight found: {price_text}\n"
+                        # Check flight quality (prefer fewer stops)
+                        quality_note = ""
+                        if stops_total == 0:
+                            quality_note = " ⭐ Direct flight!"
+                        elif stops_total == 1:
+                            quality_note = " ✈️ Good connection"
+                        
+                        response = f"✈️ One-way flight found: {price_text}{quality_note}\n"
                         response += f"🛫 Flight: {duration}, {stops}\n"
                         it = (summary.get("itinerary") or {})
                         
@@ -291,6 +362,10 @@ def FlightSearchStateMachine(
                         
                         if summary.get("baggage"):
                             response += f"Baggage: {format_baggage_summary(summary['baggage'])}\n"
+                        
+                        # Add user preference note for multiple stops
+                        if stops_total > 1:
+                            response += f"\n💡 Tip: This route has {stops_total} stops. Let me know if you'd prefer options with fewer connections."
                         
                         # Reset state machine after successful search
                         state_machines[thread_id] = ConversationFlowSM()
@@ -306,8 +381,14 @@ def FlightSearchStateMachine(
         except Exception as e:
             return f"Sorry, there was an error searching for flights: {str(e)}"
     else:
-        missing = sm.get_missing_variables()
-        return f"Flight search in progress. Still need: {', '.join(missing)}. Please provide these details to continue."
+        # Use intelligent follow-up questions instead of generic missing variables message
+        follow_up_question = sm.get_intelligent_follow_up_question()
+        if follow_up_question:
+            return follow_up_question
+        else:
+            # Fallback to generic message if no intelligent question available
+            missing = sm.get_missing_variables()
+            return f"Flight search in progress. Still need: {', '.join(missing)}. Please provide these details to continue."
 
 
 @tool("BulkFlightSearch")

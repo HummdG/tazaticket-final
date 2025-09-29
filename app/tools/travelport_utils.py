@@ -569,6 +569,184 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional, Tuple
 import calendar
 
+def parse_flexible_dates(user_input: str) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Parse flexible date expressions from user input.
+    Returns (departure_date, return_date) or (None, None) if no dates found.
+    
+    Handles patterns like:
+    - "first week of May to last week of June"
+    - "after one month"  
+    - "next month"
+    - "10 NOV" / "November 10th"
+    - "return after one month"
+    """
+    import re
+    from datetime import datetime, timedelta
+    
+    user_input_lower = user_input.lower().strip()
+    today = datetime.now().date()
+    current_year = today.year
+    
+    # Pattern for "first week of [month] to last week of [month]"
+    week_range_pattern = r'first\s+week\s+of\s+(\w+).*?last\s+week\s+of\s+(\w+)'
+    match = re.search(week_range_pattern, user_input_lower)
+    if match:
+        start_month_str, end_month_str = match.groups()
+        
+        month_names = {
+            'january': 1, 'february': 2, 'march': 3, 'april': 4, 'may': 5, 'june': 6,
+            'july': 7, 'august': 8, 'september': 9, 'october': 10, 'november': 11, 'december': 12,
+            'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'jun': 6, 'jul': 7,
+            'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12
+        }
+        
+        start_month = month_names.get(start_month_str)
+        end_month = month_names.get(end_month_str)
+        
+        if start_month and end_month:
+            # First week of start month (around 7th)
+            year_start = current_year + (1 if start_month < today.month else 0)
+            departure_date = f"{year_start}-{start_month:02d}-07"
+            
+            # Last week of end month (around 25th)
+            year_end = current_year + (1 if end_month < today.month else 0)
+            return_date = f"{year_end}-{end_month:02d}-25"
+            
+            return departure_date, return_date
+    
+    # Pattern for specific date mentions like "10 NOV" or "November 10th"
+    date_patterns = [
+        r'(\d{1,2})\s+(jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|september|oct|october|nov|november|dec|december)',
+        r'(jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|september|oct|october|nov|november|dec|december)\s+(\d{1,2})(?:st|nd|rd|th)?'
+    ]
+    
+    month_names = {
+        'january': 1, 'february': 2, 'march': 3, 'april': 4, 'may': 5, 'june': 6,
+        'july': 7, 'august': 8, 'september': 9, 'october': 10, 'november': 11, 'december': 12,
+        'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'jun': 6, 'jul': 7,
+        'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12
+    }
+    
+    departure_date = None
+    for pattern in date_patterns:
+        match = re.search(pattern, user_input_lower)
+        if match:
+            if pattern.startswith(r'(\d{1,2})'):  # "10 NOV" format
+                day_str, month_str = match.groups()
+            else:  # "November 10th" format
+                month_str, day_str = match.groups()
+            
+            month_num = month_names.get(month_str)
+            if month_num:
+                try:
+                    day_num = int(day_str)
+                    year = current_year + (1 if month_num < today.month or (month_num == today.month and day_num < today.day) else 0)
+                    departure_date = f"{year}-{month_num:02d}-{day_num:02d}"
+                    break
+                except ValueError:
+                    continue
+    
+    # Parse return duration patterns
+    return_date = None
+    return_patterns = [
+        r'return\s+after\s+(\d+)\s+(day|week|month)s?',
+        r'after\s+(\d+)\s+(day|week|month)s?.*return',
+        r'(\d+)\s+(day|week|month)s?\s+later'
+    ]
+    
+    for pattern in return_patterns:
+        match = re.search(pattern, user_input_lower)
+        if match and departure_date:
+            try:
+                duration = int(match.group(1))
+                unit = match.group(2)
+                
+                dep_date_obj = datetime.strptime(departure_date, '%Y-%m-%d').date()
+                
+                if unit == 'day':
+                    return_date_obj = dep_date_obj + timedelta(days=duration)
+                elif unit == 'week':
+                    return_date_obj = dep_date_obj + timedelta(weeks=duration)
+                elif unit == 'month':
+                    return_date_obj = dep_date_obj + timedelta(days=duration * 30)  # Approximation
+                
+                return_date = return_date_obj.strftime('%Y-%m-%d')
+                break
+            except (ValueError, IndexError):
+                continue
+    
+    return departure_date, return_date
+
+
+def parse_layover_requirements(user_input: str) -> Dict[str, Any]:
+    """
+    Parse layover and stopover requirements from user input.
+    
+    Handles patterns like:
+    - "with 3-day stay in Doha"
+    - "stop in Dubai for 2 days"  
+    - "layover in Istanbul"
+    - "via Qatar Airways"
+    
+    Returns dict with layover info or empty dict if none found.
+    """
+    import re
+    
+    user_input_lower = user_input.lower().strip()
+    
+    # Pattern for specific layover duration and location
+    layover_patterns = [
+        r'with\s+(\d+)[\-\s]day\s+stay\s+in\s+(\w+)',
+        r'stop\s+in\s+(\w+)\s+for\s+(\d+)\s+days?',
+        r'(\d+)[\-\s]day\s+layover\s+in\s+(\w+)',
+        r'layover\s+in\s+(\w+)\s+for\s+(\d+)\s+days?'
+    ]
+    
+    layover_info = {}
+    
+    for pattern in layover_patterns:
+        match = re.search(pattern, user_input_lower)
+        if match:
+            groups = match.groups()
+            if len(groups) == 2:
+                if groups[0].isdigit():  # Duration first
+                    duration, location = groups
+                else:  # Location first
+                    location, duration = groups
+                
+                layover_info = {
+                    'location': location.title(),
+                    'duration_days': int(duration),
+                    'type': 'stopover'  # Extended stay
+                }
+                break
+    
+    # Check for simple layover mentions without duration
+    simple_layover_patterns = [
+        r'via\s+(\w+(?:\s+\w+)?)',  # "via Dubai" or "via Qatar Airways"
+        r'through\s+(\w+)',
+        r'layover\s+in\s+(\w+)',
+        r'connecting\s+in\s+(\w+)'
+    ]
+    
+    if not layover_info:
+        for pattern in simple_layover_patterns:
+            match = re.search(pattern, user_input_lower)
+            if match:
+                location = match.group(1).title()
+                # Skip if it looks like an airline name
+                if 'airways' not in location.lower() and 'airlines' not in location.lower():
+                    layover_info = {
+                        'location': location,
+                        'type': 'layover',  # Simple connection
+                        'preference': True  # User prefers this route
+                    }
+                    break
+    
+    return layover_info
+
+
 def parse_date_range(user_input: str, departure_date: Optional[str] = None) -> Tuple[List[str], bool]:
     """
     Parse user input to detect bulk search patterns and return list of dates.
