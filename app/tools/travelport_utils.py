@@ -868,7 +868,7 @@ def bulk_search_cheapest_sync(origin: str, destination: str, dates: List[str],
 
     for i, date in enumerate(dates):
         try:
-            print(f"[BulkSearch] Searching date {i+1}/{len(limited_dates)}: {date}")
+            print(f"[BulkSearch] Searching date {i+1}/{len(dates)}: {date}")
             
             # Create payload for this specific date
             payload = payload_func(

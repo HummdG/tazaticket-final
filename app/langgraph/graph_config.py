@@ -4,6 +4,7 @@ LangGraph configuration and setup for the flight search chatbot
 
 import os
 import json, ast
+import asyncio
 from typing import Annotated
 from typing_extensions import TypedDict
 from dotenv import load_dotenv
