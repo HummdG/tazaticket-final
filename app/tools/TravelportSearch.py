@@ -1,25 +1,62 @@
 from langchain_core.tools import tool
 from dotenv import load_dotenv
 import os
-import requests
+import httpx
+import asyncio
 from typing import Any, Dict, List, Optional, Tuple
 
-# Import utility functions from the new utils module
+# Import utility functions
 try:
-    # Try relative import for package usage
     from .travelport_utils import (
         extract_cheapest_one_way_summary,
         extract_cheapest_round_trip_summary
     )
 except ImportError:
-    # Fall back to absolute import for direct execution
     from travelport_utils import (
         extract_cheapest_one_way_summary,
         extract_cheapest_round_trip_summary
     )
 
+# TD: create a shared httpx.AsyncClient for pooling
+_limits = httpx.Limits(max_connections=20, max_keepalive_connections=10)  # tune as needed
+_default_timeout = httpx.Timeout(10.0, read=30.0)  # adjust
+_shared_client: Optional[httpx.AsyncClient] = None
+
+def _get_shared_client() -> httpx.AsyncClient:
+    global _shared_client
+    if _shared_client is None or _shared_client.is_closed:
+        _shared_client = httpx.AsyncClient(limits=_limits, timeout=_default_timeout)
+    return _shared_client
+
+async def fetch_password_token(CLIENT_ID, CLIENT_SECRET, USERNAME, PASSWORD, OAUTH_URL):
+    """Async helper to fetch OAuth password token"""
+    data = {
+        "grant_type":    "password",
+        "username":      USERNAME,
+        "password":      PASSWORD,
+        "client_id":     CLIENT_ID,
+        "client_secret": CLIENT_SECRET,
+        "scope":         "openid"
+    }
+    client = _get_shared_client()
+    resp = await client.post(
+        OAUTH_URL,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        data=data
+    )
+    resp.raise_for_status()
+    body = resp.json()
+    return body["access_token"]
+
+async def fetch_catalog(CATALOG_URL, headers, payload):
+    """Async helper to call catalog endpoint"""
+    client = _get_shared_client()
+    response = await client.post(CATALOG_URL, headers=headers, json=payload)
+    response.raise_for_status()
+    return response.json()
+
 @tool("TravelportSearch")
-async def TravelportSearch(payload: dict, trip_type: str = "one-way"):
+def TravelportSearch(payload: dict, trip_type: str = "one-way"):
     """This tool calls the travelport rest api to get the cheapest flight possible for the user's given parameters"""
     load_dotenv()  # Reads .env in current directory
 
@@ -32,33 +69,19 @@ async def TravelportSearch(payload: dict, trip_type: str = "one-way"):
     OAUTH_URL       = "https://oauth.pp.travelport.com/oauth/oauth20/token"
     CATALOG_URL     = "https://api.pp.travelport.com/11/air/catalog/search/catalogproductofferings"
 
-    async def fetch_password_token():
-        data = {
-            "grant_type":    "password",
-            "username":      USERNAME,
-            "password":      PASSWORD,
-            "client_id":     CLIENT_ID,
-            "client_secret": CLIENT_SECRET,
-            "scope":         "openid"
-        }
-        # TD: async client using httpx
-        # TD: - Implement connection pooling for HTTP requests using httpx.AsyncClient with connection limits
-        import httpx
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                OAUTH_URL,
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
-                data=data
-            )
-        resp.raise_for_status()
-        return resp.json()["access_token"]
-
+    # Step 1: Get token
     try:
-        token = fetch_password_token()
-    except Exception as e:
+        token = asyncio.run(fetch_password_token(CLIENT_ID, CLIENT_SECRET, USERNAME, PASSWORD, OAUTH_URL))
+    except httpx.HTTPError as e:
         return {
             "ok": False,
             "error": f"Failed to obtain OAuth token: {str(e)}",
+            "summary": None
+        }
+    except Exception as e:
+        return {
+            "ok": False,
+            "error": f"Failed to obtain OAuth token (unexpected): {str(e)}",
             "summary": None
         }
 
@@ -73,22 +96,17 @@ async def TravelportSearch(payload: dict, trip_type: str = "one-way"):
         "Content-Version":              "11",
     }
 
+    # Step 2: Call catalog
     try:
-        # TD: async client using httpx
-        # TD: - Implement connection pooling for HTTP requests using httpx.AsyncClient with connection limits
-        import httpx
-        async with httpx.AsyncClient() as client:
-            response = await client.post(CATALOG_URL, headers=headers, json=payload)
-            response.raise_for_status()
-            resp_json = response.json()
+        resp_json = asyncio.run(fetch_catalog(CATALOG_URL, headers, payload))
 
-        # Extract summary based on trip type
+        # Extract summary
         if trip_type == "one-way":
             summary = extract_cheapest_one_way_summary(resp_json)
         else:
             summary = extract_cheapest_round_trip_summary(resp_json)
-        
-        # Legacy price extraction for backwards compatibility
+
+        # Legacy price extraction
         try:
             cheapest_flight_price = resp_json["CatalogProductOfferingsResponse"]["CatalogProductOfferings"]["CatalogProductOffering"][0]["ProductBrandOptions"][0]["ProductBrandOffering"][0]["BestCombinablePrice"]["TotalPrice"]
         except (KeyError, IndexError):
@@ -100,11 +118,17 @@ async def TravelportSearch(payload: dict, trip_type: str = "one-way"):
             "raw": resp_json,
             "summary": summary
         }
-        
-    except requests.HTTPError as e:
+
+    except httpx.HTTPStatusError as e:
         return {
             "ok": False,
-            "error": f"API request failed: {str(e)} - {response.text if 'response' in locals() else 'No response'}",
+            "error": f"API request failed: {str(e)} - response: {e.response.text if hasattr(e, 'response') else 'n/a'}",
+            "summary": None
+        }
+    except httpx.HTTPError as e:
+        return {
+            "ok": False,
+            "error": f"HTTP error: {str(e)}",
             "summary": None
         }
     except Exception as e:
