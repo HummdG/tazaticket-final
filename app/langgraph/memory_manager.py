@@ -5,12 +5,14 @@ and manages session lifecycle with idle timeouts.
 
 Asynchronous changes are implemented.
 
+Redis-based distributed memory manager for high concurrency.
 
 - Converted all DB I/O to `aioboto3`/`async` so many concurrent users don't block.
 - Replace global / per-thread `threading.Lock` with `asyncio.Lock` where possible.
 - Add a bounded semaphore to limit concurrent DynamoDB batch writers (backpressure).
 - Track pending background tasks to log errors and allow graceful shutdown.
-
+- Use Redis for distributed state management across multiple app instances.
+- Use Redis-based distributed locking for thread-safe operations.
 
 """
 
@@ -31,6 +33,9 @@ import asyncio
 import atexit
 from botocore.config import Config
 
+# Redis import
+from .redis_manager import redis_manager
+
 # Status:
 # TD: Redis
 # Done: Connection Pooling
@@ -49,6 +54,7 @@ class MemoryManager:
     """
     Pair-aware chat memory manager with DynamoDB persistence.
     Converted to fully async API for production concurrency.
+    Uses Redis for distributed state management across multiple instances.
 
     NOTE: All public methods are now `async def` and must be awaited by callers in other files. 
     """
@@ -63,13 +69,6 @@ class MemoryManager:
         pool_size = max(DEFAULT_MAX_POOL_CONNECTIONS, max_concurrent_batch_writes * 8)
         self._botocore_config = Config(max_pool_connections=pool_size)
         print(f"[MemoryManager] Botocore max_pool_connections={pool_size}")
-
-
-        # In-memory thread states
-        self.threads: Dict[str, ThreadState] = {}
-
-        # Use an asyncio.Lock for global operations (prevents blocking event loop)
-        self._global_lock = asyncio.Lock()
 
         # DynamoDB table name
         self.table_name = CHAT_HISTORY_TABLE
@@ -94,26 +93,60 @@ class MemoryManager:
         """Ensure thread_state.lock is an asyncio.Lock. This avoids forcing a
         change in memory_utils right away — we patch the object here if needed.
         """
-        if not hasattr(thread_state, "lock") or not isinstance(thread_state.lock, asyncio.Lock):
-            # Replace sync locks with async locks for event-loop safety.
-            thread_state.lock = asyncio.Lock()
+        # When using Redis, ThreadState objects don't need local locks since
+        # state operations are atomic via Redis
+        pass
 
     async def _get_thread_state(self, thread_id: str) -> ThreadState:
-        """Get or create thread state (async-safe)."""
-        # Use async global lock to avoid blocking event loop.
-        async with self._global_lock:
-            if thread_id not in self.threads:
-                print(f"[MemoryManager] Creating new thread state for {thread_id}")
-                self.threads[thread_id] = ThreadState(
-                    thread_id=thread_id,
-                    session_id=str(uuid.uuid4()),
-                    last_activity_at=time.time()
-                )
-            ts = self.threads[thread_id]
-
+        """Get or create thread state from Redis (async-safe)."""
+        redis_conn = await redis_manager.get_connection()
+        
+        # Try to load thread state from Redis
+        thread_state_key = f"thread_state:{thread_id}"
+        thread_data = await redis_conn.get(thread_state_key)
+        
+        if thread_data:
+            # Deserialize thread state from Redis
+            thread_dict = json.loads(thread_data)
+            thread_state = ThreadState(**thread_dict)
+        else:
+            # Create new thread state
+            print(f"[MemoryManager] Creating new thread state for {thread_id}")
+            thread_state = ThreadState(
+                thread_id=thread_id,
+                session_id=str(uuid.uuid4()),
+                last_activity_at=time.time()
+            )
+            # Save to Redis
+            await self._save_thread_state_to_redis(thread_state)
+        
         # Ensure the ThreadState has an asyncio.Lock for per-thread operations
-        await self._ensure_thread_lock(ts)
-        return ts
+        await self._ensure_thread_lock(thread_state)
+        return thread_state
+    
+    async def _save_thread_state_to_redis(self, thread_state: ThreadState) -> None:
+        """Save thread state to Redis."""
+        redis_conn = await redis_manager.get_connection()
+        thread_state_key = f"thread_state:{thread_state.thread_id}"
+        
+        # Convert ThreadState to dictionary for serialization
+        thread_dict = {
+            'thread_id': thread_state.thread_id,
+            'session_id': thread_state.session_id,
+            'last_activity_at': thread_state.last_activity_at,
+            'context_pairs': [pair.to_dict() for pair in thread_state.context_pairs],
+            'batch_pairs': [pair.to_dict() for pair in thread_state.batch_pairs],
+            'open_pair': thread_state.open_pair.to_dict() if thread_state.open_pair else None,
+            'next_seq': getattr(thread_state, 'next_seq', 0),
+            'next_turn': getattr(thread_state, 'next_turn', 0)
+        }
+        
+        # Serialize and save to Redis with expiration
+        await redis_conn.setex(
+            thread_state_key,
+            SESSION_IDLE_SECONDS * 2,  # Expire after idle timeout * 2
+            json.dumps(thread_dict)
+        )
 
     def _mark_activity(self, thread_state: ThreadState) -> None:
         """Update last activity timestamp (cheap, sync)."""
@@ -128,14 +161,21 @@ class MemoryManager:
         return is_idle
 
     # 
-    async def _evict_oldest_pair_to_batch(self, thread_state: ThreadState) -> None:
+    async def _evict_oldest_pair_to_batch(self, thread_id: str) -> None:
         """Move oldest pair from context to batch buffer (async-safe)."""
-        if thread_state.context_pairs:
-            oldest_pair = thread_state.context_pairs.pop(0)
-            thread_state.batch_pairs.append(oldest_pair)
-            print(f"[MemoryManager] Evicted oldest pair (turn {oldest_pair.turn}) to batch for thread {thread_state.thread_id}")
+        redis_conn = await redis_manager.get_connection()
+        lock_key = f"lock:thread:{thread_id}"
+        
+        async with redis_conn.lock(lock_key, timeout=10, blocking_timeout=5):
+            thread_state = await self._get_thread_state(thread_id)
+            if thread_state.context_pairs:
+                oldest_pair = thread_state.context_pairs.pop(0)
+                thread_state.batch_pairs.append(oldest_pair)
+                # Save updated thread state to Redis
+                await self._save_thread_state_to_redis(thread_state)
+                print(f"[MemoryManager] Evicted oldest pair (turn {oldest_pair.turn}) to batch for thread {thread_id}")
 
-    async def _check_and_flush_batch(self, thread_state: ThreadState) -> None:
+    async def _check_and_flush_batch(self, thread_id: str) -> None:
         """Flush batch buffer if it reaches the limit (schedules async writes).
 
         We schedule the async batch writer (or await it when called from an async
@@ -143,27 +183,43 @@ class MemoryManager:
         entire write; instead it schedules background work but still provides
         backpressure via the semaphore inside `_batch_write_pairs`.
         """
-        if len(thread_state.batch_pairs) >= BATCH_PAIRS:
-            print(f"[MemoryManager] Batch limit reached ({len(thread_state.batch_pairs)} pairs), flushing for thread {thread_state.thread_id}")
-            # capture a copy of the buffer to avoid mutation races
-            pairs_to_flush = list(thread_state.batch_pairs)
-            thread_state.batch_pairs.clear()
-
-            # schedule the async batch write and track the task
-            task = asyncio.create_task(self._batch_write_pairs(thread_state.thread_id, pairs_to_flush, thread_state.session_id))
-            await self._track_task(task)
-            print(f"[MemoryManager] Batch cleared for thread {thread_state.thread_id}")
-
-    async def _enforce_ram_limit(self, thread_state: ThreadState) -> None:
-        """Ensure total RAM pairs don't exceed limit; flush early if needed."""
-        total_pairs = len(thread_state.context_pairs) + len(thread_state.batch_pairs)
-        if total_pairs > MAX_RAM_PAIRS:
-            print(f"[MemoryManager] RAM limit exceeded ({total_pairs} > {MAX_RAM_PAIRS}), flushing batch early for thread {thread_state.thread_id}")
-            if thread_state.batch_pairs:
+        redis_conn = await redis_manager.get_connection()
+        lock_key = f"lock:thread:{thread_id}"
+        
+        async with redis_conn.lock(lock_key, timeout=10, blocking_timeout=5):
+            thread_state = await self._get_thread_state(thread_id)
+            if len(thread_state.batch_pairs) >= BATCH_PAIRS:
+                print(f"[MemoryManager] Batch limit reached ({len(thread_state.batch_pairs)} pairs), flushing for thread {thread_id}")
+                # capture a copy of the buffer to avoid mutation races
                 pairs_to_flush = list(thread_state.batch_pairs)
                 thread_state.batch_pairs.clear()
-                task = asyncio.create_task(self._batch_write_pairs(thread_state.thread_id, pairs_to_flush, thread_state.session_id))
+
+                # schedule the async batch write and track the task
+                task = asyncio.create_task(self._batch_write_pairs(thread_id, pairs_to_flush, thread_state.session_id))
                 await self._track_task(task)
+                
+                # Save updated thread state to Redis
+                await self._save_thread_state_to_redis(thread_state)
+                print(f"[MemoryManager] Batch cleared for thread {thread_id}")
+
+    async def _enforce_ram_limit(self, thread_id: str) -> None:
+        """Ensure total RAM pairs don't exceed limit; flush early if needed."""
+        redis_conn = await redis_manager.get_connection()
+        lock_key = f"lock:thread:{thread_id}"
+        
+        async with redis_conn.lock(lock_key, timeout=10, blocking_timeout=5):
+            thread_state = await self._get_thread_state(thread_id)
+            total_pairs = len(thread_state.context_pairs) + len(thread_state.batch_pairs)
+            if total_pairs > MAX_RAM_PAIRS:
+                print(f"[MemoryManager] RAM limit exceeded ({total_pairs} > {MAX_RAM_PAIRS}), flushing batch early for thread {thread_id}")
+                if thread_state.batch_pairs:
+                    pairs_to_flush = list(thread_state.batch_pairs)
+                    thread_state.batch_pairs.clear()
+                    task = asyncio.create_task(self._batch_write_pairs(thread_id, pairs_to_flush, thread_state.session_id))
+                    await self._track_task(task)
+                    
+                    # Save updated thread state to Redis
+                    await self._save_thread_state_to_redis(thread_state)
 
     #  DynamoDB Ops (for async) 
     async def _reserve_seq_block(self, thread_id: str, count: int) -> int:
@@ -297,7 +353,11 @@ class MemoryManager:
         print(f"[MemoryManager] Starting session for thread {thread_id}")
         thread_state = await self._get_thread_state(thread_id)
 
-        async with thread_state.lock:
+        # Use Redis distributed lock for thread safety
+        redis_conn = await redis_manager.get_connection()
+        lock_key = f"lock:thread:{thread_id}"
+        
+        async with redis_conn.lock(lock_key, timeout=10, blocking_timeout=5):
             try:
                 # Check if session has been idle
                 if self._is_session_idle(thread_state):
@@ -354,12 +414,15 @@ class MemoryManager:
                         thread_state.context_pairs = []
 
                 self._mark_activity(thread_state)
+                # Update the thread state in Redis after changes
+                await self._save_thread_state_to_redis(thread_state)
                 print(f"[MemoryManager] Session started for thread {thread_id} with {len(thread_state.context_pairs)} pairs in context")
 
             except Exception as e:
                 print(f"[MemoryManager] Critical error in on_session_start for thread {thread_id}: {e}")
                 # Ensure we don't leave the session in a broken state
                 self._mark_activity(thread_state)
+                await self._save_thread_state_to_redis(thread_state)
                 print(f"[MemoryManager] Marked activity despite error, continuing with empty context")
 
     async def on_session_end(self, thread_id: str) -> None:
@@ -374,7 +437,11 @@ class MemoryManager:
         """Add user message and start a new pair (async-safe)."""
         thread_state = await self._get_thread_state(thread_id)
 
-        async with thread_state.lock:
+        # Use Redis distributed lock for thread safety
+        redis_conn = await redis_manager.get_connection()
+        lock_key = f"lock:thread:{thread_id}"
+        
+        async with redis_conn.lock(lock_key, timeout=10, blocking_timeout=5):
             self._mark_activity(thread_state)
 
             # Get sequence and turn numbers
@@ -394,13 +461,21 @@ class MemoryManager:
 
             # Create new open pair
             thread_state.open_pair = Pair(turn=turn, user_message=user_message)
+            
+            # Save updated thread state to Redis
+            await self._save_thread_state_to_redis(thread_state)
+            
             print(f"[MemoryManager] Added user message for thread {thread_id}, turn {turn}, seq {seq}")
 
     async def add_assistant_message(self, thread_id: str, content: str) -> None:
         """Add assistant message and close the current pair (async-safe)."""
         thread_state = await self._get_thread_state(thread_id)
 
-        async with thread_state.lock:
+        # Use Redis distributed lock for thread safety
+        redis_conn = await redis_manager.get_connection()
+        lock_key = f"lock:thread:{thread_id}"
+        
+        async with redis_conn.lock(lock_key, timeout=10, blocking_timeout=5):
             self._mark_activity(thread_state)
 
             if not thread_state.open_pair:
@@ -441,39 +516,48 @@ class MemoryManager:
 
             # Enforce RAM limit
             await self._enforce_ram_limit(thread_state)
+            
+            # Save updated thread state to Redis
+            await self._save_thread_state_to_redis(thread_state)
 
     async def get_context_for_llm(self, thread_id: str) -> List[Dict[str, str]]:
         """Get flattened context for LLM (last 15 pairs)"""
         thread_state = await self._get_thread_state(thread_id)
 
-        async with thread_state.lock:
-            messages = []
+        messages = []
 
-            # Add context pairs
-            for pair in thread_state.context_pairs:
-                messages.extend(pair.to_messages())
+        # Add context pairs
+        for pair in thread_state.context_pairs:
+            messages.extend(pair.to_messages())
 
-            # Add open pair user message if exists
-            if thread_state.open_pair:
-                messages.append({
-                    "role": thread_state.open_pair.user_message.role,
-                    "content": thread_state.open_pair.user_message.content
-                })
+        # Add open pair user message if exists
+        if thread_state.open_pair:
+            messages.append({
+                "role": thread_state.open_pair.user_message.role,
+                "content": thread_state.open_pair.user_message.content
+            })
 
-            print(f"[MemoryManager] Generated {len(messages)} messages for LLM context (thread {thread_id})")
-            return messages
+        print(f"[MemoryManager] Generated {len(messages)} messages for LLM context (thread {thread_id})")
+        return messages
 
     async def flush_batch(self, thread_id: str) -> None:
         """Flush batch buffer to DynamoDB"""
         thread_state = await self._get_thread_state(thread_id)
 
-        async with thread_state.lock:
+        # Use Redis distributed lock for thread safety
+        redis_conn = await redis_manager.get_connection()
+        lock_key = f"lock:thread:{thread_id}"
+        
+        async with redis_conn.lock(lock_key, timeout=10, blocking_timeout=5):
             if thread_state.batch_pairs:
                 print(f"[MemoryManager] Manually flushing {len(thread_state.batch_pairs)} pairs from batch for thread {thread_id}")
                 pairs_to_flush = list(thread_state.batch_pairs)
                 thread_state.batch_pairs.clear()
                 task = asyncio.create_task(self._batch_write_pairs(thread_id, pairs_to_flush, thread_state.session_id))
                 await self._track_task(task)
+                
+                # Save updated thread state to Redis
+                await self._save_thread_state_to_redis(thread_state)
             else:
                 print(f"[MemoryManager] No pairs in batch to flush for thread {thread_id}")
 
@@ -481,7 +565,11 @@ class MemoryManager:
         """Flush all pairs (context + batch) to DynamoDB"""
         thread_state = await self._get_thread_state(thread_id)
 
-        async with thread_state.lock:
+        # Use Redis distributed lock for thread safety
+        redis_conn = await redis_manager.get_connection()
+        lock_key = f"lock:thread:{thread_id}"
+        
+        async with redis_conn.lock(lock_key, timeout=10, blocking_timeout=5):
             # Collect all pairs to flush
             all_pairs = thread_state.context_pairs.copy()
             all_pairs.extend(thread_state.batch_pairs)
@@ -504,6 +592,10 @@ class MemoryManager:
             thread_state.context_pairs.clear()
             thread_state.batch_pairs.clear()
             thread_state.open_pair = None
+            
+            # Save updated thread state to Redis
+            await self._save_thread_state_to_redis(thread_state)
+            
             print(f"[MemoryManager] Cleared RAM state: {context_count} context + {batch_count} batch pairs for thread {thread_id}")
 
     async def prime_inmemorysaver(self, thread_id: str, graph) -> None:
@@ -513,24 +605,23 @@ class MemoryManager:
         """
         thread_state = await self._get_thread_state(thread_id)
 
-        async with thread_state.lock:
-            if not thread_state.context_pairs:
-                print(f"[MemoryManager] No context pairs to prime InMemorySaver for thread {thread_id}")
-                return
+        if not thread_state.context_pairs:
+            print(f"[MemoryManager] No context pairs to prime InMemorySaver for thread {thread_id}")
+            return
 
-            try:
-                # Convert pairs to LangChain messages
-                langchain_messages = []
-                for pair in thread_state.context_pairs:
-                    langchain_messages.extend(pair.to_langchain_messages())
-                
-                # Just store the messages - the graph will handle checkpointing automatically
-                # when the next real interaction happens
-                if langchain_messages:
-                    print(f"[MemoryManager] Priming InMemorySaver with {len(langchain_messages)} messages for thread {thread_id}")
+        try:
+            # Convert pairs to LangChain messages
+            langchain_messages = []
+            for pair in thread_state.context_pairs:
+                langchain_messages.extend(pair.to_langchain_messages())
+            
+            # Just store the messages - the graph will handle checkpointing automatically
+            # when the next real interaction happens
+            if langchain_messages:
+                print(f"[MemoryManager] Priming InMemorySaver with {len(langchain_messages)} messages for thread {thread_id}")
 
-            except Exception as e:
-                print(f"[MemoryManager] Warning: Could not prime InMemorySaver for thread {thread_id}: {e}")
+        except Exception as e:
+            print(f"[MemoryManager] Warning: Could not prime InMemorySaver for thread {thread_id}: {e}")
 
     # Background task handling utils
     # transformed _shutdown_hook 
@@ -566,20 +657,9 @@ class MemoryManager:
         start_time = time.time()
         timeout_seconds = 30
 
-        # snapshot thread ids without holding long locks
-        async with self._global_lock:
-            thread_ids = list(self.threads.keys())
-
-        # schedule flush for all threads
-        flush_tasks = []
-        for tid in thread_ids:
-            flush_tasks.append(asyncio.create_task(self.flush_all(tid)))
-
-        # wait for flush tasks with timeout
-        try:
-            await asyncio.wait_for(asyncio.gather(*flush_tasks), timeout=timeout_seconds)
-        except Exception as e:
-            print(f"[MemoryManager] Warning: timeout or error while flushing during shutdown: {e}")
+        # Since we're using Redis, we don't need to iterate through in-memory threads
+        # We'll simply close the Redis connection
+        await redis_manager.close_connection()
 
         # wait for pending background tasks to finish (short grace)
         async with self._pending_tasks_lock:

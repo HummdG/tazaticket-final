@@ -4,16 +4,16 @@ Self-contained: cheapest selection + itinerary enrichment (duration, airlines, s
 Matches the shapes expected by FlightSearchStateMachine without changing other files.
 
 
-Async-safe Travelport + Twilio helpers with connection pooling implemented
+Async-safe Travelport + Twilio helpers with connection pooling and Redis-based queue implemented
  - Provided async-safe wrappers for Travelport.invoke (detects coroutine or sync).
  - Provided a reusable Twilio async HTTP client backed by aiohttp TCPConnector (pooling).
- - Provide background worker (thread) that runs tasks (sync or async).
- - 
+ - Implemented Redis-based queue system with distributed task processing.
+ - Implemented proper async task processing with monitoring and retry mechanisms.
 
 """
 # Done:Async
-# Done:onnection Pooling
-# Redis based Queue
+# Done:Connection Pooling
+# Done:Redis based Queue
 from __future__ import annotations
 from typing import Any, Dict, List, Optional, Tuple, Callable
 from datetime import datetime, timedelta
@@ -26,6 +26,10 @@ import threading
 import time
 from queue import Queue
 import calendar
+
+# Redis imports
+from ..langgraph.redis_manager import redis_manager
+import redis.asyncio as redis
 
 # Done: aiohttp is used for connection pooling with Twilio Async client
 try:
@@ -932,11 +936,206 @@ def calculate_return_date(departure_date: str, days_offset: int) -> str:
 # ------------------------------
 # Background worker (thread) + task queue 
 # ------------------------------
+# With Redis implementation, we no longer need global in-memory queues
+# These are kept for backwards compatibility but will be deprecated
 _task_queue = Queue()
 _worker_running = False
 _worker_thread = None
-_active_searches = set()
+
+# Redis-based active searches tracking
+async def _get_active_searches() -> set:
+    """Get current active searches from Redis"""
+    redis_conn = await _get_redis_queue_connection()
+    active_searches = await redis_conn.smembers("active_searches")
+    return {search.decode('utf-8') for search in active_searches} if active_searches else set()
+
+async def _add_active_search(search_key: str):
+    """Add a search key to active searches in Redis"""
+    redis_conn = await _get_redis_queue_connection()
+    await redis_conn.sadd("active_searches", search_key)
+    # Set expiration for the set key to clean up automatically
+    await redis_conn.expire("active_searches", 3600)  # 1 hour
+
+async def _remove_active_search(search_key: str):
+    """Remove a search key from active searches in Redis"""
+    redis_conn = await _get_redis_queue_connection()
+    await redis_conn.srem("active_searches", search_key)
+
+_active_searches = set()  # Keep for backward compatibility
 _pending_messages = {}
+
+# Redis-based task queue implementation
+async def _get_redis_queue_connection() -> redis.Redis:
+    """Get Redis connection for task queue operations"""
+    return await redis_manager.get_connection()
+
+async def _enqueue_redis_task(task_func_name: str, *args, **kwargs) -> str:
+    """Add a task to Redis queue with a unique ID"""
+    redis_conn = await _get_redis_queue_connection()
+    
+    # Create task payload
+    task_payload = {
+        'func_name': task_func_name,
+        'args': args,
+        'kwargs': kwargs,
+        'created_at': time.time(),
+        'status': 'queued',
+        'attempts': 0,
+        'max_attempts': 3
+    }
+    
+    # Generate unique task ID
+    task_id = f"task:{int(time.time())}:{hash(json.dumps([args, kwargs], sort_keys=True)) % 1000000}"
+    
+    # Store task in Redis
+    await redis_conn.setex(f"task:{task_id}", 3600, json.dumps(task_payload))  # Expire after 1 hour
+    # Add to queue
+    await redis_conn.lpush("task_queue", task_id)
+    
+    print(f"[RedisQueue] Task {task_id} queued for {task_func_name}")
+    return task_id
+
+async def _process_redis_task_queue():
+    """Process tasks from Redis queue"""
+    redis_conn = await _get_redis_queue_connection()
+    
+    while True:
+        try:
+            # Get next task ID from queue
+            result = await redis_conn.brpop(["task_queue"], timeout=1)  # Blocking pop with 1s timeout
+            if result:
+                _, task_id_bytes = result
+                task_id = task_id_bytes.decode('utf-8')
+                
+                # Get task payload
+                task_data = await redis_conn.get(f"task:{task_id}")
+                if not task_data:
+                    continue
+                
+                task = json.loads(task_data)
+                print(f"[RedisQueue] Processing task {task_id}: {task['func_name']}")
+                
+                # Update task status to processing
+                task['status'] = 'processing'
+                task['started_at'] = time.time()
+                await redis_conn.setex(f"task:{task_id}", 3600, json.dumps(task))
+                
+                # Execute task
+                try:
+                    # Import the function dynamically (simplified - in real implementation you'd have a registry)
+                    if task['func_name'] == 'execute_bulk_search_background':
+                        # Extract actual function from this module
+                        result = execute_bulk_search_background(*task['args'], **task['kwargs'])
+                        task['status'] = 'completed'
+                        task['result'] = result
+                    else:
+                        print(f"[RedisQueue] Unknown function: {task['func_name']}")
+                        task['status'] = 'failed'
+                        task['error'] = f"Unknown function: {task['func_name']}"
+                
+                except Exception as e:
+                    # Handle execution error
+                    task['status'] = 'failed'
+                    task['error'] = str(e)
+                    task['attempts'] = task.get('attempts', 0) + 1
+                    
+                    # Retry logic
+                    if task['attempts'] < task['max_attempts']:
+                        print(f"[RedisQueue] Task {task_id} failed, retrying ({task['attempts']}/{task['max_attempts']})")
+                        task['status'] = 'queued'  # Reset to queued for retry
+                        await redis_conn.lpush("task_queue", task_id)  # Re-queue for retry
+                    else:
+                        print(f"[RedisQueue] Task {task_id} failed after {task['max_attempts']} attempts")
+                
+                # Update task status
+                task['completed_at'] = time.time()
+                await redis_conn.setex(f"task:{task_id}", 3600, json.dumps(task))
+                
+                if task['status'] == 'completed':
+                    print(f"[RedisQueue] Task {task_id} completed successfully")
+                elif task['status'] == 'failed' and task['attempts'] >= task['max_attempts']:
+                    print(f"[RedisQueue] Task {task_id} failed permanently")
+                    
+        except asyncio.CancelledError:
+            print("[RedisQueue] Task processor cancelled")
+            break
+        except Exception as e:
+            print(f"[RedisQueue] Error processing task queue: {e}")
+            await asyncio.sleep(1)  # Brief pause before continuing
+
+# Task queue processor task
+_task_processor_task = None
+
+# Async task execution functions
+async def run_bulk_search_task(origin: str, destination: str, dates: List[str], 
+                              number_of_passengers: int, carriers: List[str], 
+                              trip_type: str = "one-way", thread_id: str = None, 
+                              user_phone: str = None, original_user_input: str = "", 
+                              detected_language: str = "en"):
+    """Run a bulk search task in an async context with proper error handling"""
+    if not origin or not destination or not dates:
+        print("[AsyncBulkSearch] Missing required params for bulk search")
+        return {"ok": False, "error": "Missing required parameters"}
+
+    print(f"[AsyncBulkSearch] Starting bulk search: {origin}->{destination}, {len(dates)} dates")
+    
+    # Import payload functions
+    if trip_type == "one-way":
+        from ..payloads.OneWayFlightSearch import OneWayFlightSearch
+        payload_func = OneWayFlightSearch
+    else:
+        from ..payloads.RoundTripFlightSearch import RoundTripFlightSearch
+        payload_func = RoundTripFlightSearch
+
+    try:
+        # Create tasks for all date searches
+        tasks = []
+        for date in dates:
+            tasks.append(asyncio.create_task(
+                search_single_date_async(payload_func, origin, destination, date,
+                                         number_of_passengers, carriers, trip_type)
+            ))
+
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        valid_results = []
+        cheapest_result = None
+        cheapest_price = float('inf')
+
+        for result in results:
+            if isinstance(result, Exception):
+                print(f"[AsyncBulkSearch] Search task failed with error: {result}")
+                continue
+            if isinstance(result, dict) and result.get("ok") and result.get("summary"):
+                valid_results.append(result)
+                
+                # Extract price based on trip type
+                summary = result["summary"]
+                if trip_type == "round-trip" and summary.get("price_total"):
+                    price = summary["price_total"].get("total")
+                elif trip_type == "one-way" and summary.get("price"):
+                    price = summary["price"].get("total")
+                else:
+                    continue
+                if price and float(price) < cheapest_price:
+                    cheapest_price = float(price)
+                    cheapest_result = result
+
+        response = {
+            "ok": len(valid_results) > 0,
+            "cheapest_result": cheapest_result,
+            "cheapest_price": cheapest_price if cheapest_price != float('inf') else None,
+            "total_searches": len(dates),
+            "successful_searches": len(valid_results),
+            "all_results": valid_results,
+            "search_summary": f"Searched {len(dates)} dates, found {len(valid_results)} valid options"
+        }
+        
+        print(f"[AsyncBulkSearch] Completed bulk search: {len(valid_results)} valid results found")
+        return response
+    except Exception as e:
+        print(f"[AsyncBulkSearch] Error during bulk search: {e}")
+        return {"ok": False, "error": str(e)}
 
 # TD: async task processing
 def _background_worker():
@@ -966,28 +1165,48 @@ def _background_worker():
 
 def start_background_worker():
     """Start the background worker thread"""
-    global _worker_running, _worker_thread
+    global _worker_running, _worker_thread, _task_processor_task
     if not _worker_running:
         _worker_running = True
         _worker_thread = threading.Thread(target=_background_worker, daemon=True)
         _worker_thread.start()
         print("[BulkSearch] Background worker thread started")
+        
+        # Also start the Redis-based task processor
+        if _task_processor_task is None or _task_processor_task.done():
+            _task_processor_task = asyncio.create_task(_process_redis_task_queue())
+            print("[RedisQueue] Redis task processor started")
 
 def stop_background_worker():
     """Stop the background worker thread"""
-    global _worker_running, _worker_thread
+    global _worker_running, _worker_thread, _task_processor_task
     if _worker_running:
         _worker_running = False
         _task_queue.put(None)  # Shutdown signal
         if _worker_thread:
             _worker_thread.join(timeout=2.0)
+        
+        # Cancel Redis task processor
+        if _task_processor_task and not _task_processor_task.done():
+            _task_processor_task.cancel()
+        
         print("[BulkSearch] Background worker stopped")
 
+async def queue_bulk_search_task_async(task_func: Callable, *args, **kwargs):
+    """Queue a task using Redis-based queue system"""
+    # Determine the function name for the Redis queue
+    func_name = task_func.__name__
+    task_id = await _enqueue_redis_task(func_name, *args, **kwargs)
+    print(f"[RedisQueue] Task {task_id} queued for async processing")
+    return task_id
+
 def queue_bulk_search_task(task_func: Callable, *args, **kwargs):
+    """Queue a task (maintaining backward compatibility with in-memory queue)"""
+    # For backward compatibility, keep using the in-memory queue
     if not _worker_running:
         start_background_worker()
     _task_queue.put((task_func, args, kwargs))
-    print("[BulkSearch] Task queued for background processing")
+    print("[BulkSearch] Task queued for background processing (in-memory)")
 
 # ------------------------------
 # Twilio async client with connection pooling (Done: reusable)
@@ -1156,25 +1375,107 @@ def execute_bulk_search_background(**kwargs):
       - notify_thread_id (optional): where to send results (whatsapp thread id)
       - store_if_no_contact (optional): whether to store pending messages instead of sending
     """
-    try:
-        origin = kwargs.get("origin") or kwargs.get("from") or kwargs.get("orig")
-        destination = kwargs.get("destination") or kwargs.get("to") or kwargs.get("dest")
-        dates = kwargs.get("dates") or kwargs.get("date_list") or []
-        number_of_passengers = kwargs.get("number_of_passengers") or kwargs.get("pax") or 1
-        carriers = kwargs.get("carriers") or kwargs.get("carrier_list") or []
-        trip_type = kwargs.get("trip_type") or "one-way"
-        notify_thread_id = kwargs.get("notify_thread_id") or kwargs.get("thread_id")
-        store_if_no_contact = kwargs.get("store_if_no_contact", True)
+    # Since this is called from background thread, we need to handle async operations properly
+    async def _async_execute():
+        try:
+            origin = kwargs.get("origin") or kwargs.get("from") or kwargs.get("orig")
+            destination = kwargs.get("destination") or kwargs.get("to") or kwargs.get("dest")
+            dates = kwargs.get("dates") or kwargs.get("date_list") or []
+            number_of_passengers = kwargs.get("number_of_passengers") or kwargs.get("pax") or 1
+            carriers = kwargs.get("carriers") or kwargs.get("carrier_list") or []
+            trip_type = kwargs.get("trip_type") or "one-way"
+            notify_thread_id = kwargs.get("notify_thread_id") or kwargs.get("thread_id")
+            store_if_no_contact = kwargs.get("store_if_no_contact", True)
 
-        # Basic validation
-        if not origin or not destination or not dates:
-            print("[BulkSearch] execute_bulk_search_background missing required params")
-            return
+            # Basic validation
+            if not origin or not destination or not dates:
+                print("[BulkSearch] execute_bulk_search_background missing required params")
+                return
 
-        print(f"[BulkSearch] execute_bulk_search_background starting: {origin}->{destination}, {len(dates)} dates")
+            search_key = f"{notify_thread_id}:{origin}:{destination}"
+            
+            # Add to active searches
+            from .travelport_utils import _add_active_search
+            await _add_active_search(search_key)
+            
+            print(f"[BulkSearch] execute_bulk_search_background starting: {origin}->{destination}, {len(dates)} dates")
 
-        # Run the synchronous bulk search in this background thread (so it can call sync libs)
-        result = bulk_search_cheapest_sync(origin, destination, dates, number_of_passengers, carriers, trip_type=trip_type)
+            # Run the synchronous bulk search in this background thread (so it can call sync libs)
+            result = bulk_search_cheapest_sync(origin, destination, dates, number_of_passengers, carriers, trip_type=trip_type)
+            
+            # Remove from active searches when complete
+            from .travelport_utils import _remove_active_search
+            await _remove_active_search(search_key)
+            
+            # Prepare summary message — adapt formatting to your tastes
+            if not result.get("ok"):
+                short = f"No valid fares found for {origin}→{destination} for provided dates."
+                if notify_thread_id:
+                    send_async_response(notify_thread_id, short)
+                elif store_if_no_contact:
+                    # store pending in case no immediate contact
+                    store_pending_message(str(notify_thread_id or "unknown"), short)
+                print("[BulkSearch] execute_bulk_search_background completed with no results")
+                return
+
+            cheapest = result.get("cheapest_result")
+            price = result.get("cheapest_price")
+            total_searches = result.get("total_searches")
+            successful = result.get("successful_searches")
+
+            # Build a useful human-friendly message
+            msg_lines = []
+            msg_lines.append(f"Cheapest fares for {origin} → {destination}")
+            msg_lines.append(f"Searched {total_searches} dates, found {successful} options")
+            if price:
+                msg_lines.append(f"Lowest price: {price}")
+            if cheapest:
+                # attempt to extract useful details
+                summary = cheapest.get("summary") or {}
+                # Try one-way summary shape first
+                if summary.get("price"):
+                    leg_price = summary["price"].get("total")
+                    dt = summary.get("itinerary", {}).get("departure_time_text") or summary.get("search_date")
+                    airlines = (summary.get("itinerary", {}).get("airlines")) or "N/A"
+                    dur = (summary.get("itinerary", {}).get("duration_human")) or "N/A"
+                    stops = summary.get("itinerary", {}).get("stops")
+                    msg_lines.append(f"- {dt} | {airlines} | {dur} | stops: {stops} | fare: {leg_price}")
+                # round-trip possibility
+                elif summary.get("price_total"):
+                    pt = summary["price_total"].get("total")
+                    outb = summary.get("outbound") or {}
+                    inbound = summary.get("inbound") or {}
+                    msg_lines.append(f"- Round-trip total: {pt}")
+                    if outb:
+                        dt = outb.get("itinerary", {}).get("departure_time_text") or outb.get("search_date")
+                        msg_lines.append(f"  Outbound: {dt} | {outb.get('itinerary', {}).get('airlines')} | {outb.get('itinerary', {}).get('duration_human')}")
+                    if inbound:
+                        dt = inbound.get("itinerary", {}).get("departure_time_text") or inbound.get("search_date")
+                        msg_lines.append(f"  Return: {dt} | {inbound.get('itinerary', {}).get('airlines')} | {inbound.get('itinerary', {}).get('duration_human')}")
+                else:
+                    msg_lines.append("- Details unavailable for cheapest result")
+            message = "\n".join(msg_lines)
+
+            # Send or store
+            if notify_thread_id:
+                send_async_response(notify_thread_id, message)
+            else:
+                if store_if_no_contact:
+                    store_pending_message("unknown", message)
+
+            print("[BulkSearch] execute_bulk_search_background finished and notification sent/stored")
+        except Exception as e:
+            # Even in async context, make sure to remove from active searches
+            try:
+                search_key = f"{kwargs.get('thread_id', 'unknown')}:{kwargs.get('origin', 'unknown')}:{kwargs.get('destination', 'unknown')}"
+                from .travelport_utils import _remove_active_search
+                await _remove_active_search(search_key)
+            except:
+                pass  # Ignore errors in cleanup
+            print(f"[BulkSearch] execute_bulk_search_background failed: {e}")
+    
+    # Run the async execution in a new event loop since this function is called from a thread
+    return _run_async_safely(_async_execute())
 
         # Prepare summary message — adapt formatting to your tastes
         if not result.get("ok"):
@@ -1240,3 +1541,11 @@ def execute_bulk_search_background(**kwargs):
 # Init: start background worker automatically
 # ------------------------------
 start_background_worker()
+
+# ------------------------------
+# Graceful shutdown function
+# ------------------------------
+def shutdown():
+    """Graceful shutdown of background workers"""
+    stop_background_worker()
+    print("[BulkSearch] Shutdown completed")

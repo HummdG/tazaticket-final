@@ -43,6 +43,22 @@ class Message:
     seq: int
     turn: int  # pair index
     meta: Optional[Dict[str, Any]] = None
+    
+    def to_dict(self):
+        """Convert Message to dictionary for serialization"""
+        return {
+            'role': self.role,
+            'content': self.content,
+            'ts_iso': self.ts_iso,
+            'seq': self.seq,
+            'turn': self.turn,
+            'meta': self.meta
+        }
+    
+    @classmethod
+    def from_dict(cls, data):
+        """Create Message from dictionary"""
+        return cls(**data)
 
 
 @dataclass
@@ -71,6 +87,25 @@ class Pair:
             messages.append(AIMessage(content=self.assistant_message.content))
         return messages
 
+    def to_dict(self):
+        """Convert Pair to dictionary for serialization"""
+        return {
+            'turn': self.turn,
+            'user_message': self.user_message.to_dict(),
+            'assistant_message': self.assistant_message.to_dict() if self.assistant_message else None
+        }
+
+    @classmethod
+    def from_dict(cls, data):
+        """Create Pair from dictionary"""
+        user_msg = Message.from_dict(data['user_message'])
+        assistant_msg = Message.from_dict(data['assistant_message']) if data['assistant_message'] else None
+        return cls(
+            turn=data['turn'],
+            user_message=user_msg,
+            assistant_message=assistant_msg
+        )
+
 
 @dataclass
 class ThreadState:
@@ -87,6 +122,42 @@ class ThreadState:
     # lock: asyncio.Lock = field(default_factory=lambda: asyncio.Lock())
     #  MEmoryManager already has an async function:  _ensure_thread_lock() that converts lock to asyncio.Lock()
     lock: threading.Lock = field(default_factory=threading.Lock)
+    
+    def to_dict(self):
+        """Convert ThreadState to dictionary for serialization"""
+        return {
+            'thread_id': self.thread_id,
+            'session_id': self.session_id,
+            'last_activity_at': self.last_activity_at,
+            'next_seq': self.next_seq,
+            'next_turn': self.next_turn,
+            'context_pairs': [pair.to_dict() for pair in self.context_pairs],
+            'batch_pairs': [pair.to_dict() for pair in self.batch_pairs],
+            'open_pair': self.open_pair.to_dict() if self.open_pair else None
+        }
+
+    @classmethod
+    def from_dict(cls, data):
+        """Create ThreadState from dictionary"""
+        context_pairs = [Pair.from_dict(pair_data) for pair_data in data['context_pairs']]
+        batch_pairs = [Pair.from_dict(pair_data) for pair_data in data['batch_pairs']]
+        open_pair = Pair.from_dict(data['open_pair']) if data['open_pair'] else None
+        
+        # Create ThreadState instance
+        thread_state = cls(
+            thread_id=data['thread_id'],
+            session_id=data['session_id'],
+            last_activity_at=data['last_activity_at'],
+            next_seq=data['next_seq'],
+            next_turn=data['next_turn'],
+            context_pairs=context_pairs,
+            batch_pairs=batch_pairs,
+            open_pair=open_pair
+        )
+        
+        # Set the lock to asyncio.Lock for compatibility with async MemoryManager
+        thread_state.lock = asyncio.Lock()
+        return thread_state
 
 
 def get_now_iso() -> str:

@@ -8,6 +8,7 @@ FlightSearchStateMachine tool for managing flight search state and performing se
 from langchain_core.tools import tool
 from datetime import datetime, timedelta
 import re
+import json
 from typing import Optional
 import asyncio
 
@@ -30,14 +31,36 @@ from .travelport_utils import (
     extract_return_duration
 )
 
-# State machine storage per thread
-state_machines = {}
+# Redis import
+from ..langgraph.redis_manager import redis_manager
 
-def get_or_create_state_machine(thread_id: str) -> ConversationFlowSM:
-    """Get existing state machine or create new one for thread"""
-    if thread_id not in state_machines:
-        state_machines[thread_id] = ConversationFlowSM()
-    return state_machines[thread_id]
+async def get_or_create_state_machine(thread_id: str) -> ConversationFlowSM:
+    """Get existing state machine from Redis or create new one for thread"""
+    redis_conn = await redis_manager.get_connection()
+    state_key = f"state_machine:{thread_id}"
+    
+    # Try to load state machine from Redis
+    sm_data = await redis_conn.get(state_key)
+    if sm_data:
+        sm_dict = json.loads(sm_data)
+        sm = ConversationFlowSM.from_dict(sm_dict)
+    else:
+        # Create new state machine
+        sm = ConversationFlowSM()
+        # Save to Redis with TTL (e.g., 24 hours)
+        await _save_state_machine_to_redis(thread_id, sm)
+    
+    return sm
+
+async def _save_state_machine_to_redis(thread_id: str, sm: ConversationFlowSM) -> None:
+    """Save state machine to Redis with TTL"""
+    redis_conn = await redis_manager.get_connection()
+    state_key = f"state_machine:{thread_id}"
+    
+    # Serialize state machine to JSON
+    sm_data = json.dumps(sm.to_dict())
+    # Set with TTL of 24 hours
+    await redis_conn.setex(state_key, 86400, sm_data)  # 24 hours = 86400 seconds
 
 def resolve_city_to_iata(city_input: str) -> str:
     """
@@ -148,171 +171,177 @@ def FlightSearchStateMachine(
     - Otherwise, use comprehensive default carrier list for broader search results
     """
     
-    def fix_date_year(date_str):
-        """Ensure date is in the future - if in past, move to next year"""
-        if not date_str:
-            return date_str
-        try:
-            date_obj = datetime.strptime(date_str, '%Y-%m-%d').date()
-            today = datetime.now().date()
-            
-            # If the date is in the past, move it to next year
-            if date_obj < today:
-                next_year_date = date_obj.replace(year=today.year + 1)
-                return next_year_date.strftime('%Y-%m-%d')
-            elif date_obj.year < today.year:
-                # If year is definitely wrong (like 2023), use current year
-                current_year_date = date_obj.replace(year=today.year)
-                if current_year_date < today:
+    # Since this function is a sync tool, we need to run async operations properly
+    async def _async_operation():
+        def fix_date_year(date_str):
+            """Ensure date is in the future - if in past, move to next year"""
+            if not date_str:
+                return date_str
+            try:
+                date_obj = datetime.strptime(date_str, '%Y-%m-%d').date()
+                today = datetime.now().date()
+                
+                # If the date is in the past, move it to next year
+                if date_obj < today:
                     next_year_date = date_obj.replace(year=today.year + 1)
                     return next_year_date.strftime('%Y-%m-%d')
+                elif date_obj.year < today.year:
+                    # If year is definitely wrong (like 2023), use current year
+                    current_year_date = date_obj.replace(year=today.year)
+                    if current_year_date < today:
+                        next_year_date = date_obj.replace(year=today.year + 1)
+                        return next_year_date.strftime('%Y-%m-%d')
+                    else:
+                        return current_year_date.strftime('%Y-%m-%d')
+                return date_str
+            except:
+                return date_str
+        
+        # Get state machine for this thread
+        sm = await get_or_create_state_machine(thread_id)
+        
+        # Set mode of conversation if provided
+        if mode_of_conversation:
+            sm.set_variable('mode_of_conversation', mode_of_conversation)
+        
+        # Parse carrier preference from user input
+        preferred_carriers = parse_carrier_preference(user_input_text) if user_input_text else DEFAULT_PREFERRED_CARRIERS
+        
+        # Update provided fields with city-to-IATA mapping
+        if origin:
+            iata_origin = resolve_city_to_iata(origin)
+            sm.set_variable('origin', iata_origin)
+        if destination:
+            iata_destination = resolve_city_to_iata(destination)
+            sm.set_variable('destination', iata_destination)
+        if departure_date:
+            corrected_departure = fix_date_year(departure_date)
+            sm.set_variable('departure_date', corrected_departure)
+        if return_date:
+            corrected_return = fix_date_year(return_date)
+            sm.set_variable('return_date', corrected_return)
+        if number_of_passengers:
+            sm.set_variable('number_of_passengers', number_of_passengers)
+        if type_of_trip:
+            # Normalize trip type variations
+            normalized_trip_type = type_of_trip.lower().strip()
+            if normalized_trip_type in ['oneway', 'one-way', 'one way']:
+                normalized_trip_type = 'one-way'
+            elif normalized_trip_type in ['roundtrip', 'round-trip', 'round trip', 'return']:
+                normalized_trip_type = 'round-trip'
+            sm.set_variable('type_of_trip', normalized_trip_type)
+        
+        # Set detected language and mode of conversation
+        sm.set_variable('detected_language', detected_language)
+        if mode_of_conversation:
+            sm.set_variable('mode_of_conversation', mode_of_conversation)
+        elif not sm.mode_of_conversation:
+            sm.set_variable('mode_of_conversation', 'text')
+        
+        # Save updated state machine to Redis
+        await _save_state_machine_to_redis(thread_id, sm)
+        
+        # Check if complete and perform search
+        if sm.get_state() == "complete":
+            try:
+                if sm.type_of_trip == "one-way":
+                    payload = OneWayFlightSearch(
+                        origin=sm.origin,
+                        destination=sm.destination,
+                        departure_date=sm.departure_date,
+                        number_of_passengers=sm.number_of_passengers,
+                        carriers=preferred_carriers
+                    )
+                    # Use safe async execution without breaking the sync context
+                    result = _run_async_safely(TravelportSearch.invoke({"payload": payload, "trip_type": "one-way"}))
                 else:
-                    return current_year_date.strftime('%Y-%m-%d')
-            return date_str
-        except:
-            return date_str
-    
-    # Get state machine for this thread
-    sm = get_or_create_state_machine(thread_id)
-    
-    # Set mode of conversation if provided
-    if mode_of_conversation:
-        sm.set_variable('mode_of_conversation', mode_of_conversation)
-    
-    # Parse carrier preference from user input
-    preferred_carriers = parse_carrier_preference(user_input_text) if user_input_text else DEFAULT_PREFERRED_CARRIERS
-    
-    # Update provided fields with city-to-IATA mapping
-    if origin:
-        iata_origin = resolve_city_to_iata(origin)
-        sm.set_variable('origin', iata_origin)
-    if destination:
-        iata_destination = resolve_city_to_iata(destination)
-        sm.set_variable('destination', iata_destination)
-    if departure_date:
-        corrected_departure = fix_date_year(departure_date)
-        sm.set_variable('departure_date', corrected_departure)
-    if return_date:
-        corrected_return = fix_date_year(return_date)
-        sm.set_variable('return_date', corrected_return)
-    if number_of_passengers:
-        sm.set_variable('number_of_passengers', number_of_passengers)
-    if type_of_trip:
-        # Normalize trip type variations
-        normalized_trip_type = type_of_trip.lower().strip()
-        if normalized_trip_type in ['oneway', 'one-way', 'one way']:
-            normalized_trip_type = 'one-way'
-        elif normalized_trip_type in ['roundtrip', 'round-trip', 'round trip', 'return']:
-            normalized_trip_type = 'round-trip'
-        sm.set_variable('type_of_trip', normalized_trip_type)
-    
-    # Set detected language and mode of conversation
-    sm.set_variable('detected_language', detected_language)
-    if mode_of_conversation:
-        sm.set_variable('mode_of_conversation', mode_of_conversation)
-    elif not sm.mode_of_conversation:
-        sm.set_variable('mode_of_conversation', 'text')
-    
-    # Check if complete and perform search
-    if sm.get_state() == "complete":
-        try:
-            if sm.type_of_trip == "one-way":
-                payload = OneWayFlightSearch(
-                    origin=sm.origin,
-                    destination=sm.destination,
-                    departure_date=sm.departure_date,
-                    number_of_passengers=sm.number_of_passengers,
-                    carriers=preferred_carriers
-                )
-                # Done: await async invoke
-                # Use safe async execution without breaking the sync context
-                result = _run_async_safely(TravelportSearch.invoke({"payload": payload, "trip_type": "one-way"}))
-            else:
-                payload = RoundTripFlightSearch(
-                    origin=sm.origin,
-                    destination=sm.destination,
-                    departure_date=sm.departure_date,
-                    return_date=sm.return_date,
-                    number_of_passengers=sm.number_of_passengers,
-                    carriers=preferred_carriers
-                )
-                # Done: await async invoke
-                # Use safe async execution without breaking the sync context
-                result = _run_async_safely(TravelportSearch.invoke({"payload": payload, "trip_type": "round-trip"}))
+                    payload = RoundTripFlightSearch(
+                        origin=sm.origin,
+                        destination=sm.destination,
+                        departure_date=sm.departure_date,
+                        return_date=sm.return_date,
+                        number_of_passengers=sm.number_of_passengers,
+                        carriers=preferred_carriers
+                    )
+                    # Use safe async execution without breaking the sync context
+                    result = _run_async_safely(TravelportSearch.invoke({"payload": payload, "trip_type": "round-trip"}))
 
-            if result.get("ok"):
-                summary = result.get("summary")
-                if summary:
-                    # Format detailed flight information
-                    if summary.get("price_total"):  # Round-trip
-                        price = summary["price_total"]
-                        outbound = summary.get("outbound", {})
-                        inbound = summary.get("inbound", {})
-                        
-                        # Initialize response for round-trip
-                        response = f"✈️ Round-trip flight found: {summary['price_total']} {summary['currency']}\n"
-                        
-                        if outbound:
-                            duration = format_duration(outbound.get("duration_minutes_total"))
-                            stops = format_stops(outbound.get("stops_total", 0))
-                            response += f"🛫 Outbound: {duration}, {stops}\n"
-                            if outbound.get("baggage"):
-                                response += f"   Baggage: {format_baggage_summary(outbound['baggage'])}\n"
-                            lf = format_layovers(outbound.get("itinerary"))
+                if result.get("ok"):
+                    summary = result.get("summary")
+                    if summary:
+                        # Format detailed flight information
+                        if summary.get("price_total"):  # Round-trip
+                            price = summary["price_total"]
+                            outbound = summary.get("outbound", {})
+                            inbound = summary.get("inbound", {})
+                            
+                            # Initialize response for round-trip
+                            response = f"✈️ Round-trip flight found: {summary['price_total']} {summary['currency']}\n"
+                            
+                            if outbound:
+                                duration = format_duration(outbound.get("duration_minutes_total"))
+                                stops = format_stops(outbound.get("stops_total", 0))
+                                response += f"🛫 Outbound: {duration}, {stops}\n"
+                                if outbound.get("baggage"):
+                                    response += f"   Baggage: {format_baggage_summary(outbound['baggage'])}\n"
+                                lf = format_layovers(outbound.get("itinerary"))
+                                if lf:
+                                    response += lf
+                            
+                            if inbound:
+                                duration = format_duration(inbound.get("duration_minutes_total"))
+                                stops = format_stops(inbound.get("stops_total", 0))
+                                response += f"🛬 Return: {duration}, {stops}\n"
+                                if inbound.get("baggage"):
+                                    response += f"   Baggage: {format_baggage_summary(inbound['baggage'])}\n"
+                                lf = format_layovers(inbound.get("itinerary"))
+                                if lf:
+                                    response += lf
+                            
+                            # Reset state machine after successful search
+                            await _save_state_machine_to_redis(thread_id, ConversationFlowSM())
+                            return response
+                        else:  # One-way
+                            price = summary.get("price", {})
+                            price_text = f"{price.get('total')} {price.get('currency')}" if price.get('total') else "Price not available"
+                            
+                            duration = format_duration(summary.get("duration_minutes_total"))
+                            stops = format_stops(summary.get("stops_total", 0))
+                            
+                            response = f"✈️ One-way flight found: {price_text}\n"
+                            response += f"🛫 Flight: {duration}, {stops}\n"
+                            it = (summary.get("itinerary") or {})
+                            
+                            if it.get("airlines"):
+                                response += f"Airline: {it['airlines']}\n"
+                            if it.get("flight_numbers"):
+                                response += f"Flight no.: {it['flight_numbers']}\n"
+                            lf = format_layovers(it)
                             if lf:
                                 response += lf
-                        
-                        if inbound:
-                            duration = format_duration(inbound.get("duration_minutes_total"))
-                            stops = format_stops(inbound.get("stops_total", 0))
-                            response += f"🛬 Return: {duration}, {stops}\n"
-                            if inbound.get("baggage"):
-                                response += f"   Baggage: {format_baggage_summary(inbound['baggage'])}\n"
-                            lf = format_layovers(inbound.get("itinerary"))
-                            if lf:
-                                response += lf
-                        
-                        # Reset state machine after successful search
-                        state_machines[thread_id] = ConversationFlowSM()
-                        return response
-                    else:  # One-way
-                        price = summary.get("price", {})
-                        price_text = f"{price.get('total')} {price.get('currency')}" if price.get('total') else "Price not available"
-                        
-                        duration = format_duration(summary.get("duration_minutes_total"))
-                        stops = format_stops(summary.get("stops_total", 0))
-                        
-                        response = f"✈️ One-way flight found: {price_text}\n"
-                        response += f"🛫 Flight: {duration}, {stops}\n"
-                        it = (summary.get("itinerary") or {})
-                        
-                        if it.get("airlines"):
-                            response += f"Airline: {it['airlines']}\n"
-                        if it.get("flight_numbers"):
-                            response += f"Flight no.: {it['flight_numbers']}\n"
-                        lf = format_layovers(it)
-                        if lf:
-                            response += lf
-                        
-                        if summary.get("baggage"):
-                            response += f"Baggage: {format_baggage_summary(summary['baggage'])}\n"
-                        
-                        # Reset state machine after successful search
-                        state_machines[thread_id] = ConversationFlowSM()
-                        return response
-                
-                # Fallback if no summary
-                # Reset state machine after successful search
-                state_machines[thread_id] = ConversationFlowSM()
-                return f"Flight search completed! Found flights for {sm.origin} to {sm.destination} on {sm.departure_date}."
-            else:
-                return f"Sorry, I couldn't find flights. Error: {result.get('error', 'Unknown error')}"
-                
-        except Exception as e:
-            return f"Sorry, there was an error searching for flights: {str(e)}"
-    else:
-        missing = sm.get_missing_variables()
-        return f"Flight search in progress. Still need: {', '.join(missing)}. Please provide these details to continue."
+                            
+                            if summary.get("baggage"):
+                                response += f"Baggage: {format_baggage_summary(summary['baggage'])}\n"
+                            
+                            # Reset state machine after successful search
+                            await _save_state_machine_to_redis(thread_id, ConversationFlowSM())
+                            return response
+                    
+                    # Fallback if no summary
+                    # Reset state machine after successful search
+                    await _save_state_machine_to_redis(thread_id, ConversationFlowSM())
+                    return f"Flight search completed! Found flights for {sm.origin} to {sm.destination} on {sm.departure_date}."
+                else:
+                    return f"Sorry, I couldn't find flights. Error: {result.get('error', 'Unknown error')}"
+                    
+            except Exception as e:
+                return f"Sorry, there was an error searching for flights: {str(e)}"
+        else:
+            missing = sm.get_missing_variables()
+            return f"Flight search in progress. Still need: {', '.join(missing)}. Please provide these details to continue."
+    
+    # Execute the async operation within an event loop
+    return _run_async_safely(_async_operation())
 
 
 def _run_async_safely(awaitable):
@@ -371,8 +400,9 @@ def BulkFlightSearch(
     
     # Early check for duplicate searches after city resolution
     search_key = f"{thread_id}:{origin}:{destination}"
-    from .travelport_utils import _active_searches
-    if any(key.startswith(search_key) for key in _active_searches):
+    from .travelport_utils import _get_active_searches
+    active_searches = _run_async_safely(_get_active_searches())
+    if any(key.startswith(search_key) for key in active_searches):
         return "I'm already processing a bulk search for this route. Please wait for the current search to complete."
     
     # Check if we have minimum required information
@@ -407,26 +437,32 @@ Without return duration specified, I'll search for one-way tickets only."""
     
     # Queue the bulk search for background processing and return immediate acknowledgment
     try:
-        from .travelport_utils import queue_bulk_search_task, execute_bulk_search_background
+        from .travelport_utils import queue_bulk_search_task_async, execute_bulk_search_background
         
         # For date ranges larger than 5, use background processing to avoid timeout
         print(f"[BulkFlightSearch] Thread ID received: {thread_id}")
         if len(dates) > 5:
-            # Queue the search task for background execution
-            print(f"[BulkFlightSearch] Queueing background task with thread_id: {thread_id}")
-            queue_bulk_search_task(
-                execute_bulk_search_background,
-                origin=origin,
-                destination=destination, 
-                dates=dates,
-                number_of_passengers=number_of_passengers,
-                carriers=preferred_carriers,
-                trip_type=trip_type,
-                thread_id=thread_id,
-                user_phone=None,  # Not needed, we'll use thread_id directly
-                original_user_input=user_input_text,
-                detected_language=detected_language
-            )
+            # Queue the search task for Redis-based background execution
+            print(f"[BulkFlightSearch] Queueing Redis-based background task with thread_id: {thread_id}")
+            
+            # Use the Redis-based queue in an async context
+            async def _queue_async_task():
+                await queue_bulk_search_task_async(
+                    execute_bulk_search_background,
+                    origin=origin,
+                    destination=destination, 
+                    dates=dates,
+                    number_of_passengers=number_of_passengers,
+                    carriers=preferred_carriers,
+                    trip_type=trip_type,
+                    thread_id=thread_id,
+                    user_phone=None,  # Not needed, we'll use thread_id directly
+                    original_user_input=user_input_text,
+                    detected_language=detected_language
+                )
+            
+            # Execute the async queue operation
+            _run_async_safely(_queue_async_task())
             
             # Return immediate acknowledgment
             response = f"🔍 BULK SEARCH STARTED!\n\n"

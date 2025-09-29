@@ -93,6 +93,35 @@ class ConversationFlowSM:
         
         return missing
     
+    def to_dict(self):
+        """Convert state machine to dictionary for serialization"""
+        return {
+            'current_state': self.current_state,
+            'detected_language': self.detected_language,
+            'mode_of_conversation': self.mode_of_conversation,
+            'origin': self.origin,
+            'destination': self.destination,
+            'departure_date': self.departure_date,
+            'number_of_passengers': self.number_of_passengers,
+            'type_of_trip': self.type_of_trip,
+            'return_date': self.return_date
+        }
+
+    @classmethod
+    def from_dict(cls, data):
+        """Create state machine from dictionary"""
+        sm = cls()
+        sm.current_state = data['current_state']
+        sm.detected_language = data['detected_language']
+        sm.mode_of_conversation = data['mode_of_conversation']
+        sm.origin = data['origin']
+        sm.destination = data['destination']
+        sm.departure_date = data['departure_date']
+        sm.number_of_passengers = data['number_of_passengers']
+        sm.type_of_trip = data['type_of_trip']
+        sm.return_date = data['return_date']
+        return sm
+
     def status(self):
         """Print current status"""
         print(f"\n--- Travel Booking Status ---")
