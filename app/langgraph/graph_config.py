@@ -134,6 +134,12 @@ def chatbot(state: State, llm_with_tools):
   - Flexible time periods ("next month", "between dates")
   - Large date ranges that need multiple searches
 
+**EXAMPLE - Complex Return Ticket Query:**
+For: "I need one return ticket from Barcelona to Pakistan. First week of May to last week of June any cheapest"
+- Do bulk search for cheapest outbound ticket in first week of May
+- Do bulk search for cheapest return ticket in last week of June
+- The system will automatically infer return dates based on the specified periods and always use the correct year and format for the dates!
+
 Always be conversational, helpful, and patient.""")
         
         messages = [system_prompt] + messages
