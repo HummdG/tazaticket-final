@@ -776,6 +776,44 @@ def parse_date_range(user_input: str, departure_date: Optional[str] = None) -> T
                 return [departure_date], False
             return [], False
     
+    # Check for "first week of [month] to last week of [month]" pattern first
+    week_range_pattern = r'first\s+week\s+of\s+(\w+).*?last\s+week\s+of\s+(\w+)'
+    match = re.search(week_range_pattern, user_input_lower)
+    if match:
+        start_month_str, end_month_str = match.groups()
+        
+        month_names = {
+            'january': 1, 'february': 2, 'march': 3, 'april': 4, 'may': 5, 'june': 6,
+            'july': 7, 'august': 8, 'september': 9, 'october': 10, 'november': 11, 'december': 12,
+            'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'jun': 6, 'jul': 7,
+            'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12
+        }
+        
+        start_month = month_names.get(start_month_str)
+        end_month = month_names.get(end_month_str)
+        
+        if start_month and end_month:
+            is_bulk = True
+            # Generate dates from first week of start month to last week of end month
+            year = today.year
+            if start_month < today.month:
+                year += 1  # Next year if month already passed
+                
+            start_date = datetime(year, start_month, 7).date()  # 7th as "first week"
+            
+            end_year = year
+            if end_month < start_month:  # End month is next year
+                end_year += 1
+            end_date = datetime(end_year, end_month, 25).date()  # 25th as "last week"
+            
+            # Generate all dates in range
+            current_date = start_date
+            while current_date <= end_date:
+                dates.append(current_date.strftime('%Y-%m-%d'))
+                current_date += timedelta(days=1)
+            
+            return dates, is_bulk
+    
     # Bulk search patterns
     bulk_patterns = {
         'november': ('month', 11),
@@ -1099,6 +1137,8 @@ def is_bulk_search_query(user_input: str) -> bool:
     """
     Quick check to determine if user input indicates a bulk search request.
     """
+    import re
+    
     bulk_indicators = [
         'cheapest in',
         'cheapest ticket in',
@@ -1111,6 +1151,7 @@ def is_bulk_search_query(user_input: str) -> bool:
         'this week',
         'next month',
         'this month',
+        'any cheapest',  # Added for queries like "any cheapest"
         'november',
         'december',
         'january',
@@ -1126,7 +1167,24 @@ def is_bulk_search_query(user_input: str) -> bool:
     ]
     
     user_lower = user_input.lower()
-    return any(indicator in user_lower for indicator in bulk_indicators)
+    
+    # Check for basic bulk indicators
+    if any(indicator in user_lower for indicator in bulk_indicators):
+        return True
+    
+    # Check for date range patterns like "first week of May to last week of June"
+    date_range_patterns = [
+        r'first\s+week\s+of\s+\w+.*?last\s+week\s+of\s+\w+',
+        r'beginning\s+of\s+\w+.*?end\s+of\s+\w+',
+        r'early\s+\w+.*?late\s+\w+',
+        r'\w+\s+to\s+\w+.*cheapest'  # "May to June cheapest"
+    ]
+    
+    for pattern in date_range_patterns:
+        if re.search(pattern, user_lower):
+            return True
+    
+    return False
 
 
 def extract_return_duration(user_input: str) -> Optional[int]:

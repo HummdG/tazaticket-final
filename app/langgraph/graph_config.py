@@ -126,7 +126,15 @@ def chatbot(state: State, llm_with_tools):
    - Provide examples in your questions (e.g., "departure date like November 10th")
    - Offer multiple options when locations are ambiguous
 
-Always be conversational, helpful, and patient. Use the FlightSearchStateMachine tool for regular searches and BulkFlightSearch for date range queries.""")
+**IMPORTANT TOOL ROUTING:**
+- Use **FlightSearchStateMachine** for specific date searches (single dates)
+- Use **BulkFlightSearch** for:
+  - Date range queries ("first week of May to last week of June")
+  - Cheapest ticket requests ("any cheapest", "cheapest in May")
+  - Flexible time periods ("next month", "between dates")
+  - Large date ranges that need multiple searches
+
+Always be conversational, helpful, and patient.""")
         
         messages = [system_prompt] + messages
     

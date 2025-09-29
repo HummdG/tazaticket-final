@@ -467,9 +467,9 @@ Without return duration specified, I'll search for one-way tickets only."""
     try:
         from .travelport_utils import queue_bulk_search_task, execute_bulk_search_background
         
-        # For date ranges larger than 5, use background processing to avoid timeout
+        # Always use background processing for bulk searches to avoid Twilio timeout
         print(f"[BulkFlightSearch] Thread ID received: {thread_id}")
-        if len(dates) > 5:
+        if len(dates) > 1:
             # Queue the search task for background execution
             print(f"[BulkFlightSearch] Queueing background task with thread_id: {thread_id}")
             queue_bulk_search_task(
