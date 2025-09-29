@@ -20,6 +20,8 @@ from app.langgraph.memory_utils import Message, Pair, ThreadState, CONTEXT_PAIRS
 def mock_dynamodb_table():
     """Create a mock DynamoDB table for testing"""
     with mock_dynamodb():
+        # Check Async Client
+        # TD: Implement connection pooling for AWS services using aioboto3 or session reuse
         dynamodb = boto3.client('dynamodb', region_name='us-east-1')
         
         # Create the table
