@@ -122,7 +122,7 @@ def main():
     
     # Test 4: Try sending a voice message (with a placeholder URL)
     print("Test 4: Sending voice message (with placeholder URL)...")
-    response = client.send_voice_message("https://example.com/audio.ogg")
+    # response = client.send_voice_message("https://example.com/audio.ogg")
     print(f"Response status: {response.status_code}")
     print(f"Response content: {response.text}")
     print()
