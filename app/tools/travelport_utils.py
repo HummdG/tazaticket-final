@@ -1162,6 +1162,24 @@ def _background_worker():
             continue
     print("[BulkSearch] Background worker stopped")
 
+def _run_async_safely(awaitable):
+    """
+    Run an awaitable safely whether inside or outside an event loop.
+    """
+    try:
+        # Check if we're already inside a running event loop
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # No running event loop, safe to use asyncio.run()
+        return asyncio.run(awaitable)
+    else:
+        # Inside a running event loop, run the coroutine in a separate thread
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(asyncio.run, awaitable)
+            return future.result()
+
+
 def start_background_worker():
     """Start the background worker thread"""
     global _worker_running, _worker_thread, _task_processor_task
