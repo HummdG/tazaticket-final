@@ -1384,6 +1384,9 @@ def store_pending_message(thread_id: str, message: str):
 # ------------------------------
 #  execute_bulk_search_background 
 # ------------------------------
+# Global flag to track if background worker has been initialized
+_background_worker_initialized = False
+
 def execute_bulk_search_background(**kwargs):
     """
     Orchestration function for background bulk search.
@@ -1392,6 +1395,12 @@ def execute_bulk_search_background(**kwargs):
       - notify_thread_id (optional): where to send results (whatsapp thread id)
       - store_if_no_contact (optional): whether to store pending messages instead of sending
     """
+    global _background_worker_initialized
+    # Initialize background worker if not already done
+    if not _background_worker_initialized:
+        start_background_worker()
+        _background_worker_initialized = True
+    
     # Since this is called from background thread, we need to handle async operations properly
     async def _async_execute():
         try:
@@ -1493,71 +1502,6 @@ def execute_bulk_search_background(**kwargs):
     
     # Run the async execution in a new event loop since this function is called from a thread
     return _run_async_safely(_async_execute())
-
-        # Prepare summary message — adapt formatting to your tastes
-        if not result.get("ok"):
-            short = f"No valid fares found for {origin}→{destination} for provided dates."
-            if notify_thread_id:
-                send_async_response(notify_thread_id, short)
-            elif store_if_no_contact:
-                # store pending in case no immediate contact
-                store_pending_message(str(notify_thread_id or "unknown"), short)
-            print("[BulkSearch] execute_bulk_search_background completed with no results")
-            return
-
-        cheapest = result.get("cheapest_result")
-        price = result.get("cheapest_price")
-        total_searches = result.get("total_searches")
-        successful = result.get("successful_searches")
-
-        # Build a useful human-friendly message
-        msg_lines = []
-        msg_lines.append(f"Cheapest fares for {origin} → {destination}")
-        msg_lines.append(f"Searched {total_searches} dates, found {successful} options")
-        if price:
-            msg_lines.append(f"Lowest price: {price}")
-        if cheapest:
-            # attempt to extract useful details
-            summary = cheapest.get("summary") or {}
-            # Try one-way summary shape first
-            if summary.get("price"):
-                leg_price = summary["price"].get("total")
-                dt = summary.get("itinerary", {}).get("departure_time_text") or summary.get("search_date")
-                airlines = (summary.get("itinerary", {}).get("airlines")) or "N/A"
-                dur = (summary.get("itinerary", {}).get("duration_human")) or "N/A"
-                stops = summary.get("itinerary", {}).get("stops")
-                msg_lines.append(f"- {dt} | {airlines} | {dur} | stops: {stops} | fare: {leg_price}")
-            # round-trip possibility
-            elif summary.get("price_total"):
-                pt = summary["price_total"].get("total")
-                outb = summary.get("outbound") or {}
-                inbound = summary.get("inbound") or {}
-                msg_lines.append(f"- Round-trip total: {pt}")
-                if outb:
-                    dt = outb.get("itinerary", {}).get("departure_time_text") or outb.get("search_date")
-                    msg_lines.append(f"  Outbound: {dt} | {outb.get('itinerary', {}).get('airlines')} | {outb.get('itinerary', {}).get('duration_human')}")
-                if inbound:
-                    dt = inbound.get("itinerary", {}).get("departure_time_text") or inbound.get("search_date")
-                    msg_lines.append(f"  Return: {dt} | {inbound.get('itinerary', {}).get('airlines')} | {inbound.get('itinerary', {}).get('duration_human')}")
-            else:
-                msg_lines.append("- Details unavailable for cheapest result")
-        message = "\n".join(msg_lines)
-
-        # Send or store
-        if notify_thread_id:
-            send_async_response(notify_thread_id, message)
-        else:
-            if store_if_no_contact:
-                store_pending_message("unknown", message)
-
-        print("[BulkSearch] execute_bulk_search_background finished and notification sent/stored")
-    except Exception as e:
-        print(f"[BulkSearch] execute_bulk_search_background failed: {e}")
-
-# ------------------------------
-# Init: start background worker automatically
-# ------------------------------
-start_background_worker()
 
 # ------------------------------
 # Graceful shutdown function
