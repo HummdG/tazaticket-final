@@ -285,16 +285,16 @@ class SpeechProcessor:
         # Done: async client if available 
         self.assembly_api_key = os.getenv("ASSEMBLYAI_API_KEY")
         if not self.assembly_api_key:
-            print("⚠️ Warning: ASSEMBLYAI_API_KEY not found in environment variables")
+            print("! Warning: ASSEMBLYAI_API_KEY not found in environment variables")
 
 # Initialize SpeechGen for TTS
         speechgen_key = os.getenv("SPEECHGEN_API_KEY")
         http_client = get_http_client()
         if speechgen_key:
             self.speechgen_client = SpeechGenClient(speechgen_key, http_client=http_client)
-            print("✅ SpeechGen TTS initialized (async httpx)")
+            print("+ SpeechGen TTS initialized (async httpx)")
         else:
-            print("⚠️ Warning: SPEECHGEN_API_KEY not found in environment variables")
+            print("! Warning: SPEECHGEN_API_KEY not found in environment variables")
             self.speechgen_client = None
 
     # ---- Voice selection (async) ----
@@ -369,7 +369,7 @@ class SpeechProcessor:
                     print("❌ Failed to upload Twilio media to S3")
                     return None, None
                 transcription_url = public_url
-                print(f"✅ Using S3 URL for AssemblyAI: {transcription_url[:80]}...")
+                print(f"+ Using S3 URL for AssemblyAI: {transcription_url[:80]}...")
             # Configure AssemblyAI transcription with language detection
             # Done: async await
             client = get_http_client()
@@ -397,7 +397,7 @@ class SpeechProcessor:
                 if status == "completed":
                     text = data.get("text", "")
                     lang = data.get("language_code") or data.get("language") or "en"
-                    print(f"🎤 STT complete ({len(text)} chars). detected_language={lang}")
+                    print(f"MIC STT complete ({len(text)} chars). detected_language={lang}")
                     return text, lang
                 if status == "error":
                     print(f"❌ AssemblyAI transcription error: {data.get('error')}")
@@ -456,10 +456,10 @@ class SpeechProcessor:
                         tts_language = "ur"
                         print("🔄 Punjabi detected — using Shahmukhi text with Urdu voice")
                     else:
-                        print("⚠️ Punjabi translation failed — using English text with Urdu voice")
+                        print("! Punjabi translation failed — using English text with Urdu voice")
                         tts_language = "ur"
                 except Exception as e:
-                    print(f"⚠️ Punjabi translation exception: {e}")
+                    print(f"! Punjabi translation exception: {e}")
                     tts_language = "ur"
              # Select appropriate voice for the TTS language
             voice = await self._get_voice_for_language_async(tts_language)
@@ -534,7 +534,7 @@ async def send_twilio_message(to_number: str, message: str):
         resp = await client.post(url, data=data, auth=(account_sid, auth_token))
         resp.raise_for_status()
         j = resp.json()
-        print(f"✅ Sent text message: {j.get('sid')}")
+        print(f"+ Sent text message: {j.get('sid')}")
     except Exception as e:
         print(f"❌ Error sending Twilio message: {e}")
 
@@ -555,7 +555,7 @@ async def send_twilio_voice_message(to_number: str, media_url: str):
         resp = await client.post(url, data=data, auth=(account_sid, auth_token))
         resp.raise_for_status()
         j = resp.json()
-        print(f"✅ Sent voice/media message: {j.get('sid')}")
+        print(f"+ Sent voice/media message: {j.get('sid')}")
     except Exception as e:
         print(f"❌ Error sending Twilio voice message: {e}")
 
