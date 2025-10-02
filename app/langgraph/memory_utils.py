@@ -23,12 +23,12 @@ from langchain_core.messages import HumanMessage, AIMessage
 
 load_dotenv()
 # Configuration from environment
-CHAT_HISTORY_TABLE = os.getenv("CHAT_HISTORY_TABLE")
-AWS_REGION = os.getenv("AWS_REGION")
-SESSION_IDLE_SECONDS = int(os.getenv("SESSION_IDLE_SECONDS"))  # e.g. 6 hours
-CONTEXT_PAIRS = int(os.getenv("CONTEXT_PAIRS"))
-BATCH_PAIRS = int(os.getenv("BATCH_PAIRS"))
-MAX_RAM_PAIRS = int(os.getenv("MAX_RAM_PAIRS"))
+CHAT_HISTORY_TABLE = os.getenv("CHAT_HISTORY_TABLE", "chat_history")
+AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
+SESSION_IDLE_SECONDS = int(os.getenv("SESSION_IDLE_SECONDS", 21600))  # e.g. 6 hours (21600 seconds)
+CONTEXT_PAIRS = int(os.getenv("CONTEXT_PAIRS", 10))
+BATCH_PAIRS = int(os.getenv("BATCH_PAIRS", 5))
+MAX_RAM_PAIRS = int(os.getenv("MAX_RAM_PAIRS", 20))
 
 # Connection pooling default (tweak during load tests)
 DEFAULT_MAX_POOL_CONNECTIONS = 50
