@@ -27,8 +27,6 @@ import time
 from queue import Queue
 import calendar
 
-# Redis imports
-from ..langgraph.redis_manager import redis_manager
 import redis.asyncio as redis
 
 # Done: aiohttp is used for connection pooling with Twilio Async client
@@ -967,6 +965,7 @@ _pending_messages = {}
 # Redis-based task queue implementation
 async def _get_redis_queue_connection() -> redis.Redis:
     """Get Redis connection for task queue operations"""
+    from ..langgraph.redis_manager import redis_manager
     return await redis_manager.get_connection()
 
 async def _enqueue_redis_task(task_func_name: str, *args, **kwargs) -> str:
