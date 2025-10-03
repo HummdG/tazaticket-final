@@ -125,6 +125,9 @@ def main():
     # response = client.send_voice_message("https://example.com/audio.ogg")
     print(f"Response status: {response.status_code}")
     print(f"Response content: {response.text}")
+
+
+    
     print()
     
     time.sleep(1)  # Pause between requests

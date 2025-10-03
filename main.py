@@ -2,20 +2,50 @@ import os
 from dotenv import load_dotenv
 import html
 
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Form
 from fastapi.responses import Response
 
 # Import our LangGraph configuration
-from app.langgraph import create_graph, invoke_graph, extract_last_ai_text
+from app.langgraph.graph_config import create_graph, invoke_graph, extract_last_ai_text
+
+# Import services
+from app.services.translation_service import TranslationService
 
 # Import voice processing components
 from app.speech.speech_processor import queue_voice_task, process_voice_message_background
 
-# Create the graph
-graph = create_graph()
+# Create FastAPI app with lifespan
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: Initialize async resources
+    print("🚀 Starting up Tazaticket application...")
+    
+    # Initialize translation service
+    translation_service = TranslationService()
+    app.state.translation_service = translation_service
+    print("🌐 Translation service initialized")
+    
+    # Initialize LangGraph
+    graph = create_graph()
+    app.state.graph = graph
+    print("🧠 LangGraph initialized")
+    
+    yield  # The application runs during this part
+    
+    # Shutdown: Clean up resources
+    print("🛑 Shutting down Tazaticket application...")
+    
+    # Close translation service if needed
+    # Currently, TranslationService doesn't have a close method, but we could add one if needed
+    # await translation_service.aclose() if hasattr(translation_service, 'aclose') else None
+    
+    # Close memory manager if needed
+    from app.langgraph.memory_manager import memory_manager
+    await memory_manager.shutdown()
+    print("💾 Memory manager shut down")
 
-# Create FastAPI app
-app = FastAPI()
+app = FastAPI(lifespan=lifespan)
 
 @app.get("/")
 async def healthcheck():
