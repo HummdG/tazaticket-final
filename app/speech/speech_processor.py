@@ -449,8 +449,9 @@ class SpeechProcessor:
             # Punjabi special case: translation service likely sync; run in thread
             if detected_language in ("pa", "pa_in", "pa_pk"):
                 try:
-                    from app.services.translation_service import translation_service
-                    translated_text = await asyncio.to_thread(translation_service.translate_en_to_shahmukhi, text)
+                    from app.services.translation_service import TranslationService
+                    temp_translation_service = TranslationService()
+                    translated_text = await temp_translation_service.translate_en_to_shahmukhi(text)
                     if translated_text:
                         tts_text = translated_text
                         tts_language = "ur"
@@ -671,15 +672,18 @@ async def process_voice_message_background(media_url: str, thread_id: str, from_
         english_text = transcribed_text
         if detected_language != "en":
             try:
-                from app.services.translation_service import translation_service
-                _, translated_text = await asyncio.to_thread(translation_service.detect_and_translate_to_english, transcribed_text)
+                from app.services.translation_service import TranslationService
+                temp_translation_service = TranslationService()
+                _, translated_text = await temp_translation_service.detect_and_translate_to_english(transcribed_text)
                 if translated_text:
                     english_text = translated_text
                     print("[VoiceProcessor] Translated to English")
                 else:
+                    english_text = transcribed_text
                     print("[VoiceProcessor] Translation returned empty — using original text")
             except Exception as e:
                 print(f"[VoiceProcessor] Translation exception: {e}")
+                english_text = transcribed_text
 
         # 3) Run LangGraph (sync functions run in thread)
         from app.langgraph import create_graph, invoke_graph, extract_last_ai_text
@@ -690,8 +694,9 @@ async def process_voice_message_background(media_url: str, thread_id: str, from_
         # 4) Translate back if needed (except Punjabi — handled in TTS pipeline)
         if detected_language != "en" and detected_language not in ("pa", "pa_in", "pa_pk"):
             try:
-                from app.services.translation_service import translation_service
-                translated_reply = await asyncio.to_thread(translation_service.translate_from_english, reply_text, detected_language)
+                from app.services.translation_service import TranslationService
+                temp_translation_service = TranslationService()
+                translated_reply = await temp_translation_service.translate_from_english(reply_text, detected_language)
                 if translated_reply:
                     reply_text = translated_reply
             except Exception as e:
