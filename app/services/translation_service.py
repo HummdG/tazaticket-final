@@ -20,7 +20,12 @@ class TranslationService:
         # Done: reuse client for pooling
         try:
             # TranslationServiceAsyncClient uses grpc_asyncio transport by default.
-            self.gcloud_client = translate.TranslationServiceAsyncClient()
+            # self.gcloud_client = translate.TranslationServiceAsyncClient()
+            self.gcloud_client = translate.TranslationServiceAsyncClient().from_service_account_file(
+                os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
+            ) if os.getenv('GOOGLE_APPLICATION_CREDENTIALS') else None
+            if not self.gcloud_client:
+                print("⚠️ Warning: GOOGLE_APPLICATION_CREDENTIALS not found in environment variables")
         except Exception as e:
             # Keep behavior robust if google client init fails (e.g., creds missing)
             print(f"⚠️ Warning: could not initialize Google Translate async client: {e}")
