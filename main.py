@@ -105,7 +105,7 @@ async def twilio_whatsapp(
             </Response>"""
         else:
             # Process text message with language detection
-            from app.services.translation_service import translation_service
+            translation_service = app.state.translation_service
             detected_language, english_text = await translation_service.detect_and_translate_to_english(Body)
             
             if english_text is None:
@@ -114,7 +114,9 @@ async def twilio_whatsapp(
                 detected_language = "en"
             
             # Process through LangGraph with English text
-            state = invoke_graph(graph, english_text, thread_id, detected_language=detected_language)
+            graph = app.state.graph
+            from app.langgraph.graph_config import invoke_graph
+            state = await invoke_graph(graph, english_text, thread_id, detected_language=detected_language)
             reply_text = extract_last_ai_text(state) or "Got it."
             
             # Translate response back to detected language if needed
