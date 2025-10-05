@@ -445,6 +445,7 @@ class MemoryManager:
 
     async def on_session_end(self, thread_id: str) -> None:
         """End session and flush all remaining pairs"""
+        print(f"[MemoryManager] on_session_end called for thread {thread_id}")
         print(f"[MemoryManager] Ending session for thread {thread_id}")
         try:
             await self.flush_all(thread_id)
