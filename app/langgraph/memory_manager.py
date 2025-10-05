@@ -129,8 +129,17 @@ class MemoryManager:
         redis_conn = await redis_manager.get_connection()
         thread_state_key = f"thread_state:{thread_state.thread_id}"
         
-        # Convert ThreadState to dictionary for serialization using the to_dict method
-        thread_dict = thread_state.to_dict()
+        # Convert ThreadState to dictionary for serialization
+        thread_dict = {
+            'thread_id': thread_state.thread_id,
+            'session_id': thread_state.session_id,
+            'last_activity_at': thread_state.last_activity_at,
+            'context_pairs': [pair.to_dict() for pair in thread_state.context_pairs],
+            'batch_pairs': [pair.to_dict() for pair in thread_state.batch_pairs],
+            'open_pair': thread_state.open_pair.to_dict() if thread_state.open_pair else None,
+            'next_seq': getattr(thread_state, 'next_seq', 0),
+            'next_turn': getattr(thread_state, 'next_turn', 0)
+        }
         
         # Serialize and save to Redis with expiration
         await redis_conn.setex(
