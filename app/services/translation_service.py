@@ -215,5 +215,4 @@ class TranslationService:
         return bool(os.getenv('OPENAI_API_KEY'))
 
 
-# Global translation service instance
-translation_service = TranslationService()
+
