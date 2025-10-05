@@ -107,7 +107,8 @@ async def twilio_whatsapp(
             # Process text message with language detection
             translation_service = app.state.translation_service
             detected_language, english_text = await translation_service.detect_and_translate_to_english(Body)
-            
+           
+
             if english_text is None:
                 # Translation failed, use original text
                 english_text = Body
@@ -117,13 +118,17 @@ async def twilio_whatsapp(
             graph = app.state.graph
             from app.langgraph.graph_config import invoke_graph
             state = await invoke_graph(graph, english_text, thread_id, detected_language=detected_language)
+            print("awaited invoke_graph done")
             reply_text = extract_last_ai_text(state) or "Got it."
+            print(f"🤖 Assistant reply: {reply_text}")
             
             # Translate response back to detected language if needed
             if detected_language != "en":
                 translated_reply = await translation_service.translate_from_english(reply_text, detected_language)
+                print(f"Translated reply: {translated_reply}")
                 if translated_reply:
                     reply_text = translated_reply
+                    print(f"reply text: {reply_text}")
             
             twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
             <Response>
@@ -131,6 +136,7 @@ async def twilio_whatsapp(
             </Response>"""
             
     except Exception as e:
+        print(f"❌ Error processing message: {e}")
         reply_text = f"Error: {e}"
         twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
         <Response>

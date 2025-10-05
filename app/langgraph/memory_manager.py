@@ -99,6 +99,7 @@ class MemoryManager:
 
     async def _get_thread_state(self, thread_id: str) -> ThreadState:
         """Get or create thread state from Redis (async-safe)."""
+        print(f"[MemoryManager] _get_thread_state function called for thread {thread_id}")
         redis_conn = await redis_manager.get_connection()
         
         # Try to load thread state from Redis
@@ -106,11 +107,13 @@ class MemoryManager:
         thread_data = await redis_conn.get(thread_state_key)
         
         if thread_data:
+            print(f"[MemoryManager] Found existing thread state in Redis for {thread_id}")
             # Deserialize thread state from Redis
             thread_dict = json.loads(thread_data)
             thread_state = ThreadState.from_dict(thread_dict)
         else:
             # Create new thread state
+
             print(f"[MemoryManager] Creating new thread state for {thread_id}")
             thread_state = ThreadState(
                 thread_id=thread_id,
@@ -118,14 +121,19 @@ class MemoryManager:
                 last_activity_at=time.time()
             )
             # Save to Redis
+            print(f"[MemoryManager] Saving new thread state to Redis for {thread_id}")
             await self._save_thread_state_to_redis(thread_state)
         
         # Ensure the ThreadState has an asyncio.Lock for per-thread operations
+
         await self._ensure_thread_lock(thread_state)
         return thread_state
     
     async def _save_thread_state_to_redis(self, thread_state: ThreadState) -> None:
         """Save thread state to Redis."""
+        print(f"[MemoryManager] _save_thread_state_to_redis called for thread {thread_state.thread_id}")
+        print(f"[MemoryManager] Saving thread state to Redis for {thread_state.thread_id}")
+        print(f"[MemoryManager] type of thread_state : {type(thread_state)}")
         redis_conn = await redis_manager.get_connection()
         thread_state_key = f"thread_state:{thread_state.thread_id}"
         
@@ -142,11 +150,14 @@ class MemoryManager:
         }
         
         # Serialize and save to Redis with expiration
+        print(f"[MemoryManager] Saving thread state to Redis with expiration for {thread_state.thread_id}")
+        print(f"[MemoryManager] type of thread_dict : {type(thread_dict)}")
         await redis_conn.setex(
             thread_state_key,
             SESSION_IDLE_SECONDS * 2,  # Expire after idle timeout * 2
             json.dumps(thread_dict)
         )
+        print(f"[MemoryManager] 158 Successfully saved thread state to Redis for {thread_state.thread_id}")
 
     def _mark_activity(self, thread_state: ThreadState) -> None:
         """Update last activity timestamp (cheap, sync)."""
@@ -163,6 +174,7 @@ class MemoryManager:
     # 
     async def _evict_oldest_pair_to_batch(self, thread_id: str) -> None:
         """Move oldest pair from context to batch buffer (async-safe)."""
+        print(f"[MemoryManager] _evict_oldest_pair_to_batch called for thread {thread_id}")
         redis_conn = await redis_manager.get_connection()
         lock_key = f"lock:thread:{thread_id}"
         
@@ -183,6 +195,7 @@ class MemoryManager:
         entire write; instead it schedules background work but still provides
         backpressure via the semaphore inside `_batch_write_pairs`.
         """
+        print(f"[MemoryManager] _check_and_flush_batch called for thread {thread_id}")
         redis_conn = await redis_manager.get_connection()
         lock_key = f"lock:thread:{thread_id}"
         
@@ -204,6 +217,7 @@ class MemoryManager:
 
     async def _enforce_ram_limit(self, thread_id: str) -> None:
         """Ensure total RAM pairs don't exceed limit; flush early if needed."""
+        print(f"[MemoryManager] _enforce_ram_limit called for thread {thread_id}")
         redis_conn = await redis_manager.get_connection()
         lock_key = f"lock:thread:{thread_id}"
         
@@ -230,6 +244,7 @@ class MemoryManager:
         Converted to async using aioboto3 so multiple concurrent reservations can
         proceed without blocking the event loop.
         """
+        print(f"[MemoryManager] _reserve_seq_block called for thread {thread_id} with count {count}")
         if count <= 0:
             return 0
 
@@ -512,16 +527,18 @@ class MemoryManager:
                 await self._evict_oldest_pair_to_batch(thread_state)
 
             # Check if batch needs flushing
-            await self._check_and_flush_batch(thread_state)
+            # await self._check_and_flush_batch(thread_state)
+            await self._check_and_flush_batch(thread_id=thread_id)
 
             # Enforce RAM limit
-            await self._enforce_ram_limit(thread_state)
+            await self._enforce_ram_limit(thread_id=thread_id)
             
             # Save updated thread state to Redis
-            await self._save_thread_state_to_redis(thread_state)
+            await self._save_thread_state_to_redis(thread_state=)
 
     async def get_context_for_llm(self, thread_id: str) -> List[Dict[str, str]]:
         """Get flattened context for LLM (last 15 pairs)"""
+        print(f"[MemoryManager] get_context_for_llm called for thread {thread_id}")
         thread_state = await self._get_thread_state(thread_id)
 
         messages = []
@@ -542,6 +559,7 @@ class MemoryManager:
 
     async def flush_batch(self, thread_id: str) -> None:
         """Flush batch buffer to DynamoDB"""
+        print(f"[MemoryManager] flush_batch called for thread {thread_id}")
         thread_state = await self._get_thread_state(thread_id)
 
         # Use Redis distributed lock for thread safety
@@ -563,6 +581,7 @@ class MemoryManager:
 
     async def flush_all(self, thread_id: str) -> None:
         """Flush all pairs (context + batch) to DynamoDB"""
+        print(f"[MemoryManager] flush_all called for thread {thread_id}")
         thread_state = await self._get_thread_state(thread_id)
 
         # Use Redis distributed lock for thread safety
@@ -603,6 +622,7 @@ class MemoryManager:
         Prime InMemorySaver with last 15 pairs converted to LangChain messages.
         This ensures the graph state has consistent recent history after restarts.
         """
+        print(f"[MemoryManager] prime_inmemorysaver called for thread {thread_id}")
         thread_state = await self._get_thread_state(thread_id)
 
         if not thread_state.context_pairs:
@@ -627,6 +647,7 @@ class MemoryManager:
     # transformed _shutdown_hook 
     async def _track_task(self, task: asyncio.Task) -> None:
         """Add task to pending set and attach a callback to remove/log on completion."""
+        print(f"[MemoryManager] _track_task called for task {task}")
         async with self._pending_tasks_lock:
             self._pending_tasks.add(task)
 
@@ -653,6 +674,7 @@ class MemoryManager:
         Call this from application shutdown (e.g., FastAPI on_event("shutdown")).
         The atexit fallback will run this synchronously if the process exits.
         """
+        print("[MemoryManager] shutdown called")
         print("[MemoryManager] Shutdown initiated — flushing all threads and awaiting background tasks")
         start_time = time.time()
         timeout_seconds = 30
