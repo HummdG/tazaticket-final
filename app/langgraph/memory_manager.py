@@ -180,12 +180,16 @@ class MemoryManager:
         
         async with redis_conn.lock(lock_key, timeout=10, blocking_timeout=5):
             thread_state = await self._get_thread_state(thread_id)
-            if thread_state.context_pairs:
-                oldest_pair = thread_state.context_pairs.pop(0)
-                thread_state.batch_pairs.append(oldest_pair)
-                # Save updated thread state to Redis
-                await self._save_thread_state_to_redis(thread_state)
-                print(f"[MemoryManager] Evicted oldest pair (turn {oldest_pair.turn}) to batch for thread {thread_id}")
+            await self._evict_oldest_pair_to_batch_internal(thread_state, thread_id)
+    
+    async def _evict_oldest_pair_to_batch_internal(self, thread_state: ThreadState, thread_id: str) -> None:
+        """Internal method to evict oldest pair without acquiring a lock."""
+        if thread_state.context_pairs:
+            oldest_pair = thread_state.context_pairs.pop(0)
+            thread_state.batch_pairs.append(oldest_pair)
+            # Save updated thread state to Redis
+            await self._save_thread_state_to_redis(thread_state)
+            print(f"[MemoryManager] Evicted oldest pair (turn {oldest_pair.turn}) to batch for thread {thread_id}")
 
     async def _check_and_flush_batch(self, thread_id: str) -> None:
         """Flush batch buffer if it reaches the limit (schedules async writes).
@@ -201,19 +205,22 @@ class MemoryManager:
         
         async with redis_conn.lock(lock_key, timeout=10, blocking_timeout=5):
             thread_state = await self._get_thread_state(thread_id)
-            if len(thread_state.batch_pairs) >= BATCH_PAIRS:
-                print(f"[MemoryManager] Batch limit reached ({len(thread_state.batch_pairs)} pairs), flushing for thread {thread_id}")
-                # capture a copy of the buffer to avoid mutation races
-                pairs_to_flush = list(thread_state.batch_pairs)
-                thread_state.batch_pairs.clear()
+            await self._check_and_flush_batch_internal(thread_state, thread_id)
+    
+    async def _check_and_flush_batch_internal(self, thread_state: ThreadState, thread_id: str) -> None:
+        """Internal method to check and flush batch without acquiring a lock."""
+        if len(thread_state.batch_pairs) >= BATCH_PAIRS:
+            print(f"[MemoryManager] Batch limit reached ({len(thread_state.batch_pairs)} pairs), flushing for thread {thread_id}")
+            # capture a copy of the buffer to avoid mutation races
+            pairs_to_flush = list(thread_state.batch_pairs)
+            thread_state.batch_pairs.clear()
 
-                # schedule the async batch write and track the task
-                task = asyncio.create_task(self._batch_write_pairs(thread_id, pairs_to_flush, thread_state.session_id))
-                await self._track_task(task)
-                
-                # Save updated thread state to Redis
-                await self._save_thread_state_to_redis(thread_state)
-                print(f"[MemoryManager] Batch cleared for thread {thread_id}")
+            # schedule the async batch write and track the task
+            task = asyncio.create_task(self._batch_write_pairs(thread_id, pairs_to_flush, thread_state.session_id))
+            await self._track_task(task)
+            
+            # Save updated thread state to Redis
+            await self._save_thread_state_to_redis(thread_state)
 
     async def _enforce_ram_limit(self, thread_id: str) -> None:
         """Ensure total RAM pairs don't exceed limit; flush early if needed."""
@@ -223,17 +230,21 @@ class MemoryManager:
         
         async with redis_conn.lock(lock_key, timeout=10, blocking_timeout=5):
             thread_state = await self._get_thread_state(thread_id)
-            total_pairs = len(thread_state.context_pairs) + len(thread_state.batch_pairs)
-            if total_pairs > MAX_RAM_PAIRS:
-                print(f"[MemoryManager] RAM limit exceeded ({total_pairs} > {MAX_RAM_PAIRS}), flushing batch early for thread {thread_id}")
-                if thread_state.batch_pairs:
-                    pairs_to_flush = list(thread_state.batch_pairs)
-                    thread_state.batch_pairs.clear()
-                    task = asyncio.create_task(self._batch_write_pairs(thread_id, pairs_to_flush, thread_state.session_id))
-                    await self._track_task(task)
-                    
-                    # Save updated thread state to Redis
-                    await self._save_thread_state_to_redis(thread_state)
+            await self._enforce_ram_limit_internal(thread_state, thread_id)
+    
+    async def _enforce_ram_limit_internal(self, thread_state: ThreadState, thread_id: str) -> None:
+        """Internal method to enforce RAM limit without acquiring a lock."""
+        total_pairs = len(thread_state.context_pairs) + len(thread_state.batch_pairs)
+        if total_pairs > MAX_RAM_PAIRS:
+            print(f"[MemoryManager] RAM limit exceeded ({total_pairs} > {MAX_RAM_PAIRS}), flushing batch early for thread {thread_id}")
+            if thread_state.batch_pairs:
+                pairs_to_flush = list(thread_state.batch_pairs)
+                thread_state.batch_pairs.clear()
+                task = asyncio.create_task(self._batch_write_pairs(thread_id, pairs_to_flush, thread_state.session_id))
+                await self._track_task(task)
+                
+                # Save updated thread state to Redis
+                await self._save_thread_state_to_redis(thread_state)
 
     #  DynamoDB Ops (for async) 
     async def _reserve_seq_block(self, thread_id: str, count: int) -> int:
@@ -528,19 +539,18 @@ class MemoryManager:
             print(f"[MemoryManager] Completed pair for thread {thread_id}, turn {completed_pair.turn}")
             print(f"[MemoryManager] Context now has {len(thread_state.context_pairs)} pairs")
 
-            # Evict oldest pair if context exceeds limit
+            # Evict oldest pair if context exceeds limit - use internal method since we're already in a lock
             if len(thread_state.context_pairs) > CONTEXT_PAIRS:
-                await self._evict_oldest_pair_to_batch(thread_state)
+                await self._evict_oldest_pair_to_batch_internal(thread_state, thread_id)
 
-            # Check if batch needs flushing
-            # await self._check_and_flush_batch(thread_state)
-            await self._check_and_flush_batch(thread_id=thread_id)
+            # Check if batch needs flushing - use internal method since we're already in a lock
+            await self._check_and_flush_batch_internal(thread_state, thread_id)
 
-            # Enforce RAM limit
-            await self._enforce_ram_limit(thread_id=thread_id)
+            # Enforce RAM limit - use internal method since we're already in a lock
+            await self._enforce_ram_limit_internal(thread_state, thread_id)
             
             # Save updated thread state to Redis
-            await self._save_thread_state_to_redis(thread_state=)
+            await self._save_thread_state_to_redis(thread_state)
 
     async def get_context_for_llm(self, thread_id: str) -> List[Dict[str, str]]:
         """Get flattened context for LLM (last 15 pairs)"""
