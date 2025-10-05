@@ -178,7 +178,7 @@ class MemoryManager:
         redis_conn = await redis_manager.get_connection()
         lock_key = f"lock:thread:{thread_id}"
         
-        async with redis_conn.lock(lock_key, timeout=10, blocking_timeout=5):
+        async with redis_conn.lock(lock_key, timeout=60, blocking_timeout=30):
             thread_state = await self._get_thread_state(thread_id)
             await self._evict_oldest_pair_to_batch_internal(thread_state, thread_id)
     
@@ -203,7 +203,7 @@ class MemoryManager:
         redis_conn = await redis_manager.get_connection()
         lock_key = f"lock:thread:{thread_id}"
         
-        async with redis_conn.lock(lock_key, timeout=10, blocking_timeout=5):
+        async with redis_conn.lock(lock_key, timeout=60, blocking_timeout=30):
             thread_state = await self._get_thread_state(thread_id)
             await self._check_and_flush_batch_internal(thread_state, thread_id)
     
@@ -228,7 +228,7 @@ class MemoryManager:
         redis_conn = await redis_manager.get_connection()
         lock_key = f"lock:thread:{thread_id}"
         
-        async with redis_conn.lock(lock_key, timeout=10, blocking_timeout=5):
+        async with redis_conn.lock(lock_key, timeout=60, blocking_timeout=30):
             thread_state = await self._get_thread_state(thread_id)
             await self._enforce_ram_limit_internal(thread_state, thread_id)
     
@@ -386,7 +386,7 @@ class MemoryManager:
         redis_conn = await redis_manager.get_connection()
         lock_key = f"lock:thread:{thread_id}"
         
-        async with redis_conn.lock(lock_key, timeout=10, blocking_timeout=5):
+        async with redis_conn.lock(lock_key, timeout=60, blocking_timeout=30):
             try:
                 # Check if session has been idle
                 if self._is_session_idle(thread_state):
@@ -472,7 +472,7 @@ class MemoryManager:
         redis_conn = await redis_manager.get_connection()
         lock_key = f"lock:thread:{thread_id}"
         
-        async with redis_conn.lock(lock_key, timeout=10, blocking_timeout=5):
+        async with redis_conn.lock(lock_key, timeout=60, blocking_timeout=30):
             self._mark_activity(thread_state)
 
             # Get sequence and turn numbers
@@ -507,7 +507,7 @@ class MemoryManager:
         redis_conn = await redis_manager.get_connection()
         lock_key = f"lock:thread:{thread_id}"
         
-        async with redis_conn.lock(lock_key, timeout=10, blocking_timeout=5):
+        async with redis_conn.lock(lock_key, timeout=60, blocking_timeout=30):
             self._mark_activity(thread_state)
 
             if not thread_state.open_pair:
@@ -582,7 +582,7 @@ class MemoryManager:
         redis_conn = await redis_manager.get_connection()
         lock_key = f"lock:thread:{thread_id}"
         
-        async with redis_conn.lock(lock_key, timeout=10, blocking_timeout=5):
+        async with redis_conn.lock(lock_key, timeout=60, blocking_timeout=30):
             if thread_state.batch_pairs:
                 print(f"[MemoryManager] Manually flushing {len(thread_state.batch_pairs)} pairs from batch for thread {thread_id}")
                 pairs_to_flush = list(thread_state.batch_pairs)
@@ -604,7 +604,7 @@ class MemoryManager:
         redis_conn = await redis_manager.get_connection()
         lock_key = f"lock:thread:{thread_id}"
         
-        async with redis_conn.lock(lock_key, timeout=10, blocking_timeout=5):
+        async with redis_conn.lock(lock_key, timeout=60, blocking_timeout=30):
             # Collect all pairs to flush
             all_pairs = thread_state.context_pairs.copy()
             all_pairs.extend(thread_state.batch_pairs)
