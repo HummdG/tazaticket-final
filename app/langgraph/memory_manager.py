@@ -283,6 +283,7 @@ class MemoryManager:
         Ensures every message in every pair has a unique seq. Mutates pairs in place.
         This now awaits the async `_reserve_seq_block`.
         """
+        print(f"[MemoryManager] _assign_seqs_for_flush called for thread {thread_id}")
         missing = []
         for p in pairs:
             if p and p.user_message and not isinstance(p.user_message.seq, int):
@@ -300,6 +301,7 @@ class MemoryManager:
 
         This is the hot network path — keep it efficient and bounded.
         """
+        print(f"[MemoryManager] _batch_write_pairs called for thread {thread_id} with {len(pairs)} pairs")
         if not pairs:
             return
 
@@ -365,6 +367,7 @@ class MemoryManager:
     # high-level session APIs (async public)
     async def on_session_start(self, thread_id: str) -> None:
         """Initialize session, handle idle timeout, and load context"""
+        print(f"[MemoryManager] on_session_start called for thread {thread_id}")
         print(f"[MemoryManager] Starting session for thread {thread_id}")
         thread_state = await self._get_thread_state(thread_id)
 
@@ -379,10 +382,10 @@ class MemoryManager:
                     print(f"[MemoryManager] Session idle, starting fresh for thread {thread_id}")
 
                     # Flush all remaining pairs and start new session
-                    print(f"[MemoryManager] Flushing all pairs before starting fresh...")
+                    print("[MemoryManager] Flushing all pairs before starting fresh...")
                     try:
                         await self.flush_all(thread_id)
-                        print(f"[MemoryManager] Successfully flushed all pairs")
+                        print("[MemoryManager] Successfully flushed all pairs")
                     except Exception as e:
                         print(f"[MemoryManager] Error during flush_all: {e}")
                         # Continue even if flush fails
@@ -438,7 +441,7 @@ class MemoryManager:
                 # Ensure we don't leave the session in a broken state
                 self._mark_activity(thread_state)
                 await self._save_thread_state_to_redis(thread_state)
-                print(f"[MemoryManager] Marked activity despite error, continuing with empty context")
+                print("[MemoryManager] Marked activity despite error, continuing with empty context")
 
     async def on_session_end(self, thread_id: str) -> None:
         """End session and flush all remaining pairs"""
@@ -450,6 +453,7 @@ class MemoryManager:
 
     async def add_user_message(self, thread_id: str, content: str) -> None:
         """Add user message and start a new pair (async-safe)."""
+        print(f"[MemoryManager] add_user_message called for thread {thread_id}")
         thread_state = await self._get_thread_state(thread_id)
 
         # Use Redis distributed lock for thread safety
@@ -484,6 +488,7 @@ class MemoryManager:
 
     async def add_assistant_message(self, thread_id: str, content: str) -> None:
         """Add assistant message and close the current pair (async-safe)."""
+        print(f"[MemoryManager] add_assistant_message called for thread {thread_id}")
         thread_state = await self._get_thread_state(thread_id)
 
         # Use Redis distributed lock for thread safety
