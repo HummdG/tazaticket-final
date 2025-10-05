@@ -1,0 +1,70 @@
+[MemoryManager] Botocore max_pool_connections=64
+[MemoryManager] Initialized with table: ChatHistory, region: eu-north-1
+[MemoryManager] Config - Context pairs: 12, Batch pairs: 1, Max RAM pairs: 13
+[MemoryManager] Async batch writers semaphore max: 8
++ SpeechGen TTS initialized (async httpx)
+[VoiceProcessor] async worker loop started
+[VoiceProcessor] Background worker thread started
+🚀 Starting up Tazaticket application...
+🌐 Translation service initialized
+[GraphConfig] LangGraph created with InMemorySaver checkpointer
+🧠 LangGraph initialized
+🌐 Detected language: es for text: 'Hola, ¿cómo estás?...'
+🔄 Translated to English: 'Hola, ¿cómo estás?...' -> 'Hello, how are you?...'
+[GraphConfig] Invoking graph for thread whatsapp+34678901234 with message: 'Hello, how are you?...' (voice: False, language: es)
+[GraphConfig] Set global thread_id to: whatsapp+34678901234
+[MemoryManager] on_session_start called for thread whatsapp+34678901234
+[MemoryManager] Starting session for thread whatsapp+34678901234
+[MemoryManager] _get_thread_state function called for thread whatsapp+34678901234
+[MemoryManager] Found existing thread state in Redis for whatsapp+34678901234
+[MemoryManager] Loading conversation state from DynamoDB for thread whatsapp+34678901234
+[MemoryManager] Loading conversation state for thread whatsapp+34678901234
+[MemoryManager] No conversation state found, falling back to reading individual messages
+[MemoryManager] Reading last 12 pairs from DynamoDB for thread whatsapp+34678901234
+[MemoryManager] Retrieved 0 items from DynamoDB
+[MemoryManager] Loaded 0 complete pairs for thread whatsapp+34678901234
+[MemoryManager] Successfully loaded 0 pairs from DynamoDB
+[MemoryManager] No existing conversation found for thread whatsapp+34678901234
+[MemoryManager] _save_thread_state_to_redis called for thread whatsapp+34678901234
+[MemoryManager] Saving thread state to Redis for whatsapp+34678901234
+[MemoryManager] type of thread_state : <class 'app.langgraph.memory_utils.ThreadState'>
+[MemoryManager] Saving thread state to Redis with expiration for whatsapp+34678901234
+[MemoryManager] type of thread_dict : <class 'dict'>
+[MemoryManager] 158 Successfully saved thread state to Redis for whatsapp+34678901234
+[MemoryManager] Session started for thread whatsapp+34678901234 with 0 pairs in context
+[MemoryManager] add_user_message called for thread whatsapp+34678901234
+[MemoryManager] _get_thread_state function called for thread whatsapp+34678901234
+[MemoryManager] Found existing thread state in Redis for whatsapp+34678901234
+[MemoryManager] _save_thread_state_to_redis called for thread whatsapp+34678901234
+[MemoryManager] Saving thread state to Redis for whatsapp+34678901234
+[MemoryManager] type of thread_state : <class 'app.langgraph.memory_utils.ThreadState'>
+[MemoryManager] Saving thread state to Redis with expiration for whatsapp+34678901234
+[MemoryManager] type of thread_dict : <class 'dict'>
+[MemoryManager] 158 Successfully saved thread state to Redis for whatsapp+34678901234
+[MemoryManager] Added user message for thread whatsapp+34678901234, turn 1, seq 3
+[MemoryManager] get_context_for_llm called for thread whatsapp+34678901234
+[MemoryManager] _get_thread_state function called for thread whatsapp+34678901234
+[MemoryManager] Found existing thread state in Redis for whatsapp+34678901234
+[MemoryManager] Generated 1 messages for LLM context (thread whatsapp+34678901234)
+[GraphConfig] Using 1 context messages for LLM
+[GraphConfig] Converted to 1 LangChain messages
+[GraphConfig] Creating config with thread_id: whatsapp+34678901234
+[GraphConfig] Full config: {'configurable': {'thread_id': 'whatsapp+34678901234', 'is_voice_mode': False, 'detected_language': 'es'}}
+[GraphConfig] Adding assistant response to memory: 'Hello! I'm just a program, but I'm here and ready ...'
+[MemoryManager] add_assistant_message called for thread whatsapp+34678901234
+[MemoryManager] _get_thread_state function called for thread whatsapp+34678901234
+[MemoryManager] Found existing thread state in Redis for whatsapp+34678901234
+[MemoryManager] Completed pair for thread whatsapp+34678901234, turn 1
+[MemoryManager] Context now has 1 pairs
+[MemoryManager] _save_thread_state_to_redis called for thread whatsapp+34678901234
+[MemoryManager] Saving thread state to Redis for whatsapp+34678901234
+[MemoryManager] type of thread_state : <class 'app.langgraph.memory_utils.ThreadState'>
+[MemoryManager] Saving thread state to Redis with expiration for whatsapp+34678901234
+[MemoryManager] type of thread_dict : <class 'dict'>
+[MemoryManager] 158 Successfully saved thread state to Redis for whatsapp+34678901234
+awaited invoke_graph done
+🤖 Assistant reply: Hello! I'm just a program, but I'm here and ready to help you. How can I assist you today?
+🔄 Translated to es: 'Hello! I'm just a program, but...' -> '¡Hola! Soy solo un programa, p...'
+Translated reply: ¡Hola! Soy solo un programa, pero estoy aquí y listo para ayudarte. ¿Cómo puedo asistirte hoy?
+reply text: ¡Hola! Soy solo un programa, pero estoy aquí y listo para ayudarte. ¿Cómo puedo asistirte hoy?
+INFO:     127.0.0.1:61318 - "POST /webhook HTTP/1.1" 200 OK
