@@ -37,7 +37,7 @@ class BasicToolNode:
     def __init__(self, tools: list) -> None:
         self.tools_by_name = {tool.name: tool for tool in tools}
 
-    def __call__(self, inputs: dict):
+    async def __call__(self, inputs: dict):
         if messages := inputs.get("messages", []):
             message = messages[-1]
         else:
@@ -76,7 +76,15 @@ class BasicToolNode:
                         if user_messages:
                             tool_args["user_input_text"] = user_messages[-1].content
             
-            tool_result = self.tools_by_name[tool_call["name"]].invoke(tool_args)
+            # Use async invocation for StructuredTool instances
+            tool = self.tools_by_name[tool_call["name"]]
+            if hasattr(tool, 'ainvoke'):
+                # This is a StructuredTool that only supports async invocation
+                tool_result = await tool.ainvoke(tool_args)
+            else:
+                # Fall back to sync invocation for other tool types
+                tool_result = tool.invoke(tool_args)
+            
             outputs.append(
                 ToolMessage(
                     content=str(tool_result),
@@ -87,9 +95,9 @@ class BasicToolNode:
         return {"messages": outputs}
 
 
-def chatbot(state: State, llm_with_tools):
+async def chatbot(state: State, llm_with_tools):
     """Main chatbot node that processes user messages"""
-    return {"messages": [llm_with_tools.invoke(state["messages"])]}
+    return {"messages": [await llm_with_tools.ainvoke(state["messages"])]}
 
 
 def route_tools(state: State):
@@ -132,8 +140,8 @@ def create_graph():
     graph_builder = StateGraph(State)
     
     # Create chatbot node with bound LLM
-    def chatbot_node(state: State):
-        return chatbot(state, llm_with_tools)
+    async def chatbot_node(state: State):
+        return await chatbot(state, llm_with_tools)
     
     # Add nodes
     graph_builder.add_node("chatbot", chatbot_node)
@@ -205,7 +213,7 @@ async def invoke_graph(graph, user_message: str, thread_id: str = "default", is_
     print(f"[GraphConfig] Full config: {config}")
     
     # Invoke the graph with the full context
-    state = graph.invoke(
+    state = await graph.ainvoke(
         {"messages": langchain_messages},
         config,
     )
