@@ -89,3 +89,4 @@ npm-debug.log*
 .env.local
 .env.production
 .env.staging 
+junk
