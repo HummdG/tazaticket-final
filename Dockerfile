@@ -1,5 +1,5 @@
 # Use Python 3.11 slim as base image for smaller size
-FROM python:3.11-slim as builder
+FROM python:3.14.0rc3-slim-trixie AS builder
 
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -25,7 +25,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Production stage
-FROM python:3.11-slim as production
+FROM python:3.14.0rc3-slim-trixie AS production
 
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
