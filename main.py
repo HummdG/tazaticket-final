@@ -31,6 +31,11 @@ async def lifespan(app: FastAPI):
     app.state.graph = graph
     print("🧠 LangGraph initialized")
     
+    # Initialize and start Redis memory monitoring
+    from app.langgraph.memory_manager import memory_manager
+    await memory_manager.start_periodic_redis_memory_check()
+    print("📊 Redis memory monitoring started")
+    
     yield  # The application runs during this part
     
     # Shutdown: Clean up resources
@@ -41,7 +46,6 @@ async def lifespan(app: FastAPI):
     # await translation_service.aclose() if hasattr(translation_service, 'aclose') else None
     
     # Close memory manager if needed
-    from app.langgraph.memory_manager import memory_manager
     await memory_manager.shutdown()
     print("💾 Memory manager shut down")
 

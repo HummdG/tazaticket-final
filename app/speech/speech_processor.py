@@ -192,6 +192,11 @@ VOICE_MAP = {
 
 # Global task queue for voice processing
 # TD: redis based queue
+import redis.asyncio as redis_async
+
+# Redis connection for voice task queue
+_redis_queue = None
+
 _voice_task_queue = queue.Queue()
 _voice_worker_thread = None
 _voice_worker_running = False

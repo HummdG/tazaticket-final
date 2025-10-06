@@ -41,8 +41,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     BATCH_PAIRS=1 \
     MAX_RAM_PAIRS=13
 
-# Install only runtime dependencies
+# Install runtime dependencies including Redis
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    redis-server \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user
@@ -58,15 +59,19 @@ WORKDIR /app
 # Copy application code
 COPY --chown=app:app . .
 
+# Copy the startup script
+COPY --chown=app:app start.sh /app/start.sh
+RUN chmod +x /app/start.sh
+
 # Switch to non-root user
 USER app
 
-# Expose port
-EXPOSE 8000
+# Expose ports
+EXPOSE 8000 6379
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
     CMD python -c "import requests; requests.get('http://localhost:8000/')" || exit 1
 
-# Run the application
-CMD ["python", "main.py"] 
+# Run the startup script
+CMD ["/app/start.sh"] 

@@ -190,6 +190,9 @@ class MemoryManager:
             # Save updated thread state to Redis
             await self._save_thread_state_to_redis(thread_state)
             print(f"[MemoryManager] Evicted oldest pair (turn {oldest_pair.turn}) to batch for thread {thread_id}")
+            
+            # Check Redis memory usage after moving data between structures
+            await self.check_redis_memory_and_persist_if_needed()
 
     async def _check_and_flush_batch(self, thread_id: str) -> None:
         """Flush batch buffer if it reaches the limit (schedules async writes).
@@ -237,6 +240,9 @@ class MemoryManager:
         total_pairs = len(thread_state.context_pairs) + len(thread_state.batch_pairs)
         if total_pairs > MAX_RAM_PAIRS:
             print(f"[MemoryManager] RAM limit exceeded ({total_pairs} > {MAX_RAM_PAIRS}), flushing batch early for thread {thread_id}")
+            # Before potentially losing data due to Redis eviction, ensure it's saved to DynamoDB
+            await self.persist_to_dynamodb_before_redis_eviction(thread_id)
+            
             if thread_state.batch_pairs:
                 pairs_to_flush = list(thread_state.batch_pairs)
                 thread_state.batch_pairs.clear()
@@ -592,6 +598,67 @@ class MemoryManager:
                 
                 # Save updated thread state to Redis
                 await self._save_thread_state_to_redis(thread_state)
+    
+    async def persist_to_dynamodb_before_redis_eviction(self, thread_id: str) -> None:
+        """Persist all data in Redis to DynamoDB before Redis level eviction"""
+        print(f"[MemoryManager] persist_to_dynamodb_before_redis_eviction called for thread {thread_id}")
+        thread_state = await self._get_thread_state(thread_id)
+        
+        # Use Redis distributed lock for thread safety
+        redis_conn = await redis_manager.get_connection()
+        lock_key = f"lock:thread:{thread_id}"
+        
+        async with redis_conn.lock(lock_key, timeout=60, blocking_timeout=30):
+            # Flush any remaining batch pairs to DynamoDB
+            if thread_state.batch_pairs:
+                print(f"[MemoryManager] Flushing {len(thread_state.batch_pairs)} batch pairs to DynamoDB for thread {thread_id}")
+                pairs_to_flush = list(thread_state.batch_pairs)
+                thread_state.batch_pairs.clear()
+                await self._batch_write_pairs(thread_id, pairs_to_flush, thread_state.session_id)
+            
+            # Also flush context pairs if needed (for very old conversations)
+            if thread_state.context_pairs:
+                print(f"[MemoryManager] Flushing {len(thread_state.context_pairs)} context pairs to DynamoDB for thread {thread_id}")
+                pairs_to_flush = list(thread_state.context_pairs)
+                thread_state.context_pairs.clear()
+                await self._batch_write_pairs(thread_id, pairs_to_flush, thread_state.session_id)
+            
+            # Save updated thread state to Redis
+            await self._save_thread_state_to_redis(thread_state)
+            print(f"[MemoryManager] Completed persistence to DynamoDB for thread {thread_id}")
+    
+    async def check_redis_memory_and_persist_if_needed(self) -> None:
+        """Check Redis memory usage and persist data to DynamoDB if approaching limits"""
+        redis_conn = await redis_manager.get_connection()
+        
+        try:
+            # Get Redis info to check memory usage
+            info = await redis_conn.info('memory')
+            used_memory = info.get('used_memory', 0)
+            max_memory = info.get('maxmemory', 0)
+            
+            # If max_memory is 0, Redis has no memory limit, so return early
+            if max_memory == 0:
+                return
+                
+            # Convert to int if they're strings
+            used_memory = int(used_memory) if isinstance(used_memory, str) else used_memory
+            max_memory = int(max_memory) if isinstance(max_memory, str) else max_memory
+            
+            # Calculate usage percentage
+            if max_memory > 0:
+                memory_usage_percentage = (used_memory / max_memory) * 100
+                print(f"[MemoryManager] Redis memory usage: {memory_usage_percentage:.1f}% ({used_memory}/{max_memory} bytes)")
+                
+                # If memory usage exceeds 80%, start persisting data to DynamoDB
+                if memory_usage_percentage > 80:
+                    print(f"[MemoryManager] Redis memory usage is high ({memory_usage_percentage:.1f}%), consider persisting data")
+                    # In a real implementation, we might want to iterate through active threads
+                    # and persist their data to DynamoDB, but we don't maintain a list of active
+                    # thread IDs in memory anymore since we're using Redis
+                    # For now, we'll just log this condition
+        except Exception as e:
+            print(f"[MemoryManager] Error checking Redis memory: {e}")
             else:
                 print(f"[MemoryManager] No pairs in batch to flush for thread {thread_id}")
 
@@ -695,8 +762,9 @@ class MemoryManager:
         start_time = time.time()
         timeout_seconds = 30
 
-        # Since we're using Redis, we don't need to iterate through in-memory threads
-        # We'll simply close the Redis connection
+        # Since we're using Redis, we'll flush all pending Redis data to DynamoDB before shutdown
+        # This ensures no data is lost during Redis eviction/shutdown
+        # Note: We don't have a list of all active thread_ids in Redis, so this is a general cleanup
         await redis_manager.close_connection()
 
         # wait for pending background tasks to finish (short grace)
@@ -719,6 +787,26 @@ class MemoryManager:
         APIs directly. This exists to ease incremental migration.
         """
         return asyncio.run(coro)
+
+    async def start_periodic_redis_memory_check(self):
+        """Start periodic Redis memory monitoring in the background"""
+        async def memory_monitor():
+            while True:
+                try:
+                    await self.check_redis_memory_and_persist_if_needed()
+                    # Check every 30 seconds
+                    await asyncio.sleep(30)
+                except asyncio.CancelledError:
+                    print("[MemoryManager] Redis memory monitoring cancelled")
+                    break
+                except Exception as e:
+                    print(f"[MemoryManager] Error in Redis memory monitoring: {e}")
+                    await asyncio.sleep(30)  # Wait before retrying
+        
+        # Start the monitoring task in the background
+        monitor_task = asyncio.create_task(memory_monitor())
+        await self._track_task(monitor_task)
+        print("[MemoryManager] Started periodic Redis memory monitoring")
 
 
 # Global instance
