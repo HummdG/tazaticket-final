@@ -54,15 +54,19 @@ async def healthcheck():
 def queue_voice_processing(media_url: str, thread_id: str, from_number: str) -> str:
     """Queue voice message for background processing and return immediate response"""
     try:
-        print(f"🎤 Queueing voice message for background processing: {media_url}")
+        print(f"🎤 Queueing voice message for background processing: {media_url} (thread: {thread_id}, from: {from_number})")
         
         # Queue the heavy processing for background
-        queue_voice_task(process_voice_message_background, media_url, thread_id, from_number)
+        task_future = queue_voice_task(process_voice_message_background, media_url, thread_id, from_number)
+        print(f"🎤 Voice message queued successfully for thread {thread_id}, task future: {task_future}")
         
         return "🎤 Got your voice message! We're working on it and will respond shortly..."
         
     except Exception as e:
-        print(f"❌ Error queueing voice processing: {e}")
+        import traceback
+        print(f"❌ Error queueing voice processing for {thread_id}: {e}")
+        print(f"❌ Error traceback for {thread_id}:")
+        traceback.print_exc()
         return "Sorry, there was an error processing your voice message."
 
 @app.post("/webhook")

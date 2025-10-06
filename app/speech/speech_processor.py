@@ -347,13 +347,13 @@ class SpeechProcessor:
 
     # ---- AssemblyAI transcription (async) ----
     # Done: async await
-    async def speech_to_text_direct(self, audio_url: str) -> Tuple[Optional[str], Optional[str]]:
+    async def speech_to_text_direct(self, audio_url: str, thread_id: str = "unknown") -> Tuple[Optional[str], Optional[str]]:
         """
         Async STT using AssemblyAI REST API with language_detection=True.
         Returns (text, language_code) or (None, None) on error.
         """
         if not self.assembly_api_key:
-            print("❌ AssemblyAI API key not configured")
+            print(f"❌ AssemblyAI API key not configured for thread {thread_id}")
             return None, None
 
         try:
@@ -364,12 +364,13 @@ class SpeechProcessor:
                 import hashlib
                 user_id = hashlib.md5(audio_url.encode()).hexdigest()[:8]
                 # Upload to S3 and get public URL
+                print(f"[STT] Uploading Twilio media to S3 for thread {thread_id}")
                 public_url = await asyncio.to_thread(secure_tazaticket_s3.upload_from_twilio_url, audio_url, user_id)
                 if not public_url:
-                    print("❌ Failed to upload Twilio media to S3")
+                    print(f"❌ Failed to upload Twilio media to S3 for thread {thread_id}")
                     return None, None
                 transcription_url = public_url
-                print(f"+ Using S3 URL for AssemblyAI: {transcription_url[:80]}...")
+                print(f"[STT] Using S3 URL for AssemblyAI for thread {thread_id}: {transcription_url[:80]}...")
             # Configure AssemblyAI transcription with language detection
             # Done: async await
             client = get_http_client()
@@ -377,18 +378,20 @@ class SpeechProcessor:
             headers = {"authorization": self.assembly_api_key, "content-type": "application/json"}
             post_payload = {"audio_url": transcription_url, "language_detection": True}
 
+            print(f"[STT] Starting AssemblyAI transcription for thread {thread_id}")
             post_resp = await client.post(endpoint, json=post_payload, headers=headers)
             post_resp.raise_for_status()
             post_data = post_resp.json()
             transcript_id = post_data.get("id")
             if not transcript_id:
-                print("❌ No transcript id returned by AssemblyAI")
+                print(f"❌ No transcript id returned by AssemblyAI for thread {thread_id}")
                 return None, None
 
             # Polling for completion with backoff
             poll_url = f"{endpoint}/{transcript_id}"
             start = time.time()
             interval = 0.7
+            print(f"[STT] Started polling for transcription completion for thread {thread_id}")
             while True:
                 get_resp = await client.get(poll_url, headers=headers)
                 get_resp.raise_for_status()
@@ -397,15 +400,15 @@ class SpeechProcessor:
                 if status == "completed":
                     text = data.get("text", "")
                     lang = data.get("language_code") or data.get("language") or "en"
-                    print(f"MIC STT complete ({len(text)} chars). detected_language={lang}")
+                    print(f"[STT] STT complete for thread {thread_id} ({len(text)} chars). detected_language={lang}")
                     return text, lang
                 if status == "error":
-                    print(f"❌ AssemblyAI transcription error: {data.get('error')}")
+                    print(f"❌ AssemblyAI transcription error for thread {thread_id}: {data.get('error')}")
                     return None, None
 
                 elapsed = time.time() - start
                 if elapsed > _ASSEMBLYAI_POLL_TIMEOUT:
-                    print("❌ AssemblyAI transcription timed out")
+                    print(f"❌ AssemblyAI transcription timed out for thread {thread_id}")
                     return None, None
 
                 await asyncio.sleep(interval)
@@ -413,34 +416,37 @@ class SpeechProcessor:
                 interval = min(interval * 1.3, 3.0)
 
         except Exception as e:
-            print(f"❌ STT error: {e}")
+            import traceback
+            print(f"❌ STT error for thread {thread_id}: {e}")
+            print(f"[STT] Error traceback for thread {thread_id}:")
+            traceback.print_exc()
             return None, None
 
     # ---- sync wrapper for backward compatibility ----
-    def speech_to_text_direct_sync(self, audio_url: str) -> Tuple[Optional[str], Optional[str]]:
+    def speech_to_text_direct_sync(self, audio_url: str, thread_id: str = "unknown") -> Tuple[Optional[str], Optional[str]]:
         """
-        Convert text to speech using SpeechGen TTS with automatic voice selection
+        Sync wrapper for speech-to-text conversion
         
         Args:
-            text: Text to convert to speech
-            detected_language: Language code to select appropriate voice
+            audio_url: URL to the audio file to transcribe
+            thread_id: Thread identifier for logging purposes
             
         Returns:
-            Path to the generated audio file or None if error
+            Tuple of (transcribed text, detected language) or (None, None) on error
         """
         try:
             # Check if there's already a running event loop
             loop = asyncio.get_running_loop()
             # If we're in a running loop, schedule and wait for the result
-            return loop.run_until_complete(self.speech_to_text_direct(audio_url))
+            return loop.run_until_complete(self.speech_to_text_direct(audio_url, thread_id))
         except RuntimeError:
             # No running event loop, safe to use asyncio.run()
-            return asyncio.run(self.speech_to_text_direct(audio_url))
+            return asyncio.run(self.speech_to_text_direct(audio_url, thread_id))
 
     # ---- TTS pipeline (async) ----
-    async def text_to_speech_async(self, text: str, detected_language: str = "en") -> Optional[str]:
+    async def text_to_speech_async(self, text: str, detected_language: str = "en", thread_id: str = "unknown") -> Optional[str]:
         if not self.speechgen_client:
-            print("❌ SpeechGen client not configured")
+            print(f"❌ SpeechGen client not configured for thread {thread_id}")
             return None
         try:
             tts_text = text
@@ -455,12 +461,12 @@ class SpeechProcessor:
                     if translated_text:
                         tts_text = translated_text
                         tts_language = "ur"
-                        print("🔄 Punjabi detected — using Shahmukhi text with Urdu voice")
+                        print(f"[TTS] Punjabi detected for thread {thread_id} — using Shahmukhi text with Urdu voice")
                     else:
-                        print("! Punjabi translation failed — using English text with Urdu voice")
+                        print(f"[TTS] Punjabi translation failed for thread {thread_id} — using English text with Urdu voice")
                         tts_language = "ur"
                 except Exception as e:
-                    print(f"! Punjabi translation exception: {e}")
+                    print(f"[TTS] Punjabi translation exception for thread {thread_id}: {e}")
                     tts_language = "ur"
              # Select appropriate voice for the TTS language
             voice = await self._get_voice_for_language_async(tts_language)
@@ -470,12 +476,16 @@ class SpeechProcessor:
             output_path = tmp.name
 
             # Generate via SpeechGen (async)
+            print(f"[TTS] Starting SpeechGen TTS for thread {thread_id} with voice {voice}")
             result_path = await self.speechgen_client.tts_quick(voice, tts_text, output_path)
-            print(f"🔊 SpeechGen TTS success (voice={voice}) -> {result_path}")
+            print(f"[TTS] SpeechGen TTS success for thread {thread_id} (voice={voice}) -> {result_path}")
             return result_path
 
         except Exception as e:
-            print(f"❌ SpeechGen TTS error: {e}")
+            import traceback
+            print(f"❌ SpeechGen TTS error for thread {thread_id}: {e}")
+            print(f"[TTS] Error traceback for thread {thread_id}:")
+            traceback.print_exc()
             return None
 
     # ---- sync wrapper for compatibility ----
@@ -520,13 +530,13 @@ def _run_coro_in_thread(coro):
 
 
 # ---------- Twilio messaging via async httpx (no sync Twilio client used) ----------
-async def send_twilio_message(to_number: str, message: str):
+async def send_twilio_message(to_number: str, message: str, thread_id: str = "unknown"):
     try:
         account_sid = os.getenv("TWILIO_ACCOUNT_SID")
         auth_token = os.getenv("TWILIO_AUTH_TOKEN")
         from_number = os.getenv("TWILIO_WHATSAPP_NUMBER", "whatsapp:+14155238886")
         if not all([account_sid, auth_token]):
-            print("❌ Twilio credentials missing for message sending")
+            print(f"❌ Twilio credentials missing for message sending (thread: {thread_id})")
             return
 
         client = get_http_client()
@@ -535,18 +545,21 @@ async def send_twilio_message(to_number: str, message: str):
         resp = await client.post(url, data=data, auth=(account_sid, auth_token))
         resp.raise_for_status()
         j = resp.json()
-        print(f"+ Sent text message: {j.get('sid')}")
+        print(f"[Twilio] Sent text message for thread {thread_id}: {j.get('sid')}")
     except Exception as e:
-        print(f"❌ Error sending Twilio message: {e}")
+        import traceback
+        print(f"❌ Error sending Twilio message for thread {thread_id}: {e}")
+        print(f"[Twilio] Error traceback for thread {thread_id}:")
+        traceback.print_exc()
 
 
-async def send_twilio_voice_message(to_number: str, media_url: str):
+async def send_twilio_voice_message(to_number: str, media_url: str, thread_id: str = "unknown"):
     try:
         account_sid = os.getenv("TWILIO_ACCOUNT_SID")
         auth_token = os.getenv("TWILIO_AUTH_TOKEN")
         from_number = os.getenv("TWILIO_WHATSAPP_NUMBER", "whatsapp:+14155238886")
         if not all([account_sid, auth_token]):
-            print("❌ Twilio credentials missing for voice message sending")
+            print(f"❌ Twilio credentials missing for voice message sending (thread: {thread_id})")
             return
 
         client = get_http_client()
@@ -556,9 +569,12 @@ async def send_twilio_voice_message(to_number: str, media_url: str):
         resp = await client.post(url, data=data, auth=(account_sid, auth_token))
         resp.raise_for_status()
         j = resp.json()
-        print(f"+ Sent voice/media message: {j.get('sid')}")
+        print(f"[Twilio] Sent voice/media message for thread {thread_id}: {j.get('sid')}")
     except Exception as e:
-        print(f"❌ Error sending Twilio voice message: {e}")
+        import traceback
+        print(f"❌ Error sending Twilio voice message for thread {thread_id}: {e}")
+        print(f"[Twilio] Error traceback for thread {thread_id}:")
+        traceback.print_exc()
 
 
 # ---------- Background voice worker — runs an asyncio loop in a dedicated thread ----------
@@ -576,21 +592,36 @@ async def _voice_worker_loop():
     q = _voice_async_queue
     while _voice_worker_running:
         try:
+            print("[VoiceProcessor] Worker waiting for next task...")
             task_func, args, kwargs = await q.get()
+            task_name = getattr(task_func, '__name__', str(task_func))
+            print(f"[VoiceProcessor] Worker received task: {task_name}, args: {args[:2]}...")  # Only show first 2 args to avoid sensitive info
             try:
                 if inspect.iscoroutinefunction(task_func):
+                    print(f"[VoiceProcessor] Executing async task: {task_name}")
                     await task_func(*args, **kwargs)
+                    print(f"[VoiceProcessor] Completed async task: {task_name}")
                 else:
                     # run sync function in threadpool
+                    print(f"[VoiceProcessor] Executing sync task: {task_name}")
                     await asyncio.to_thread(task_func, *args, **kwargs)
+                    print(f"[VoiceProcessor] Completed sync task: {task_name}")
             except Exception as e:
-                print(f"[VoiceProcessor] Error while executing task {getattr(task_func,'__name__',str(task_func))}: {e}")
+                import traceback
+                print(f"[VoiceProcessor] Error while executing task {task_name}: {e}")
+                print(f"[VoiceProcessor] Error traceback for task {task_name}:")
+                traceback.print_exc()
             finally:
                 q.task_done()
+                print(f"[VoiceProcessor] Task {task_name} marked as done")
         except asyncio.CancelledError:
+            print("[VoiceProcessor] Worker loop received cancellation")
             break
         except Exception as e:
+            import traceback
             print(f"[VoiceProcessor] Worker loop exception: {e}")
+            print("[VoiceProcessor] Worker loop traceback:")
+            traceback.print_exc()
             await asyncio.sleep(0.5)
 
     _voice_worker_running = False
@@ -660,15 +691,19 @@ async def process_voice_message_background(media_url: str, thread_id: str, from_
     to schedule it.
     """
     try:
-        print(f"[VoiceProcessor] Starting background processing for {thread_id}")
-
+        print(f"[VoiceProcessor] Starting background processing for {thread_id} from {from_number}")
+        
         # 1) STT
-        transcribed_text, detected_language = await speech_processor.speech_to_text_direct(media_url)
+        print(f"[VoiceProcessor] STT: Starting speech-to-text conversion for {thread_id}")
+        transcribed_text, detected_language = await speech_processor.speech_to_text_direct(media_url, thread_id)
         if not transcribed_text:
-            await send_twilio_message(from_number, "Sorry, I couldn't understand the voice message.")
+            print(f"[VoiceProcessor] STT: Failed to transcribe audio for {thread_id}, sending error message")
+            await send_twilio_message(from_number, "Sorry, I couldn't understand the voice message.", thread_id)
             return
+        print(f"[VoiceProcessor] STT: Successfully transcribed audio for {thread_id}, detected language: {detected_language}")
 
         # 2) Translate to English if needed (sync translation helper run in thread)
+        print(f"[VoiceProcessor] Translation: Starting translation to English if needed for {thread_id}")
         english_text = transcribed_text
         if detected_language != "en":
             try:
@@ -677,21 +712,28 @@ async def process_voice_message_background(media_url: str, thread_id: str, from_
                 _, translated_text = await temp_translation_service.detect_and_translate_to_english(transcribed_text)
                 if translated_text:
                     english_text = translated_text
-                    print("[VoiceProcessor] Translated to English")
+                    print(f"[VoiceProcessor] Translation: Successfully translated to English for {thread_id}")
                 else:
                     english_text = transcribed_text
-                    print("[VoiceProcessor] Translation returned empty — using original text")
+                    print(f"[VoiceProcessor] Translation: Translation returned empty for {thread_id} — using original text")
             except Exception as e:
-                print(f"[VoiceProcessor] Translation exception: {e}")
+                print(f"[VoiceProcessor] Translation: Exception occurred while translating for {thread_id}: {e}")
                 english_text = transcribed_text
+        else:
+            print(f"[VoiceProcessor] Translation: No translation needed, already in English for {thread_id}")
 
         # 3) Run LangGraph (sync functions run in thread)
+        print(f"[VoiceProcessor] LangGraph: Starting invocation for {thread_id}")
         from app.langgraph import create_graph, invoke_graph, extract_last_ai_text
         graph = await asyncio.to_thread(create_graph)
+        print(f"[VoiceProcessor] LangGraph: Graph created successfully for {thread_id}")
         state = await asyncio.to_thread(invoke_graph, graph, english_text, thread_id, True, detected_language)
+        print(f"[VoiceProcessor] LangGraph: Graph invocation completed for {thread_id}")
         reply_text = await asyncio.to_thread(extract_last_ai_text, state) or "Got it."
+        print(f"[VoiceProcessor] LangGraph: Extracted AI response for {thread_id}: '{reply_text[:50]}...'")
 
         # 4) Translate back if needed (except Punjabi — handled in TTS pipeline)
+        print(f"[VoiceProcessor] Reverse Translation: Starting if needed for {thread_id}")
         if detected_language != "en" and detected_language not in ("pa", "pa_in", "pa_pk"):
             try:
                 from app.services.translation_service import TranslationService
@@ -699,38 +741,60 @@ async def process_voice_message_background(media_url: str, thread_id: str, from_
                 translated_reply = await temp_translation_service.translate_from_english(reply_text, detected_language)
                 if translated_reply:
                     reply_text = translated_reply
+                    print(f"[VoiceProcessor] Reverse Translation: Successfully translated back to {detected_language} for {thread_id}")
+                else:
+                    print(f"[VoiceProcessor] Reverse Translation: No translation returned for {thread_id}, keeping English response")
             except Exception as e:
-                print(f"[VoiceProcessor] Reverse translation exception: {e}")
+                print(f"[VoiceProcessor] Reverse Translation: Exception occurred while translating back for {thread_id}: {e}")
+        else:
+            print(f"[VoiceProcessor] Reverse Translation: No reverse translation needed for {thread_id} (Punjabi handled in TTS or already English)")
 
         # 5) TTS (async)
-        audio_file_path = await speech_processor.text_to_speech_async(reply_text, detected_language)
+        print(f"[VoiceProcessor] TTS: Starting text-to-speech conversion for {thread_id}")
+        audio_file_path = await speech_processor.text_to_speech_async(reply_text, detected_language, thread_id)
         if not audio_file_path:
-            await send_twilio_message(from_number, reply_text)
+            print(f"[VoiceProcessor] TTS: Failed to generate audio, sending text response for {thread_id}")
+            await send_twilio_message(from_number, reply_text, thread_id)
             return
+        print(f"[VoiceProcessor] TTS: Successfully generated audio file for {thread_id}: {audio_file_path}")
 
         # 6) Upload to S3 (sync helper run in thread)
+        print(f"[VoiceProcessor] S3: Starting upload for {thread_id}")
         try:
             from app.services.s3_handler import secure_tazaticket_s3
             presigned_url = await asyncio.to_thread(secure_tazaticket_s3.upload_voice_file, audio_file_path, thread_id)
+            if presigned_url:
+                print(f"[VoiceProcessor] S3: Successfully uploaded to S3 for {thread_id}: {presigned_url[:50]}...")
+            else:
+                print(f"[VoiceProcessor] S3: Failed to get presigned URL for {thread_id}")
         except Exception as e:
-            print(f"[VoiceProcessor] S3 upload exception: {e}")
+            print(f"[VoiceProcessor] S3: Exception occurred during upload for {thread_id}: {e}")
             presigned_url = None
 
         # cleanup
+        print(f"[VoiceProcessor] Cleanup: Removing temporary audio file for {thread_id}")
         try:
             await asyncio.to_thread(os.unlink, audio_file_path)
-        except Exception:
-            pass
+            print(f"[VoiceProcessor] Cleanup: Successfully removed temporary file for {thread_id}")
+        except Exception as e:
+            print(f"[VoiceProcessor] Cleanup: Failed to remove temporary file for {thread_id}: {e}")
 
         # 7) Send voice response (Twilio async HTTP)
+        print(f"[VoiceProcessor] Twilio: Starting response sending for {thread_id}")
         if presigned_url:
-            await send_twilio_voice_message(from_number, presigned_url)
+            print(f"[VoiceProcessor] Twilio: Sending voice message to {from_number} for {thread_id}")
+            await send_twilio_voice_message(from_number, presigned_url, thread_id)
         else:
-            await send_twilio_message(from_number, reply_text)
+            print(f"[VoiceProcessor] Twilio: Sending text message to {from_number} for {thread_id}")
+            await send_twilio_message(from_number, reply_text, thread_id)
+        print(f"[VoiceProcessor] Completed processing for {thread_id}")
 
     except Exception as e:
-        print(f"[VoiceProcessor] Background processing error: {e}")
-        await send_twilio_message(from_number, "Sorry, there was an error processing your voice message.")
+        import traceback
+        print(f"[VoiceProcessor] Background processing error for {thread_id}: {e}")
+        print(f"[VoiceProcessor] Error traceback for {thread_id}:")
+        traceback.print_exc()
+        await send_twilio_message(from_number, "Sorry, there was an error processing your voice message.", thread_id)
 
 
 # ---------- Initialize instance & start worker ----------
