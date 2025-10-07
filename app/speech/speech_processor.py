@@ -370,7 +370,7 @@ class SpeechProcessor:
                 user_id = hashlib.md5(audio_url.encode()).hexdigest()[:8]
                 # Upload to S3 and get public URL
                 print(f"[STT] Uploading Twilio media to S3 for thread {thread_id}")
-                public_url = await asyncio.to_thread(secure_tazaticket_s3.upload_from_twilio_url, audio_url, user_id)
+                public_url = await secure_tazaticket_s3.upload_from_twilio_url(audio_url, user_id)
                 if not public_url:
                     print(f"❌ Failed to upload Twilio media to S3 for thread {thread_id}")
                     return None, None

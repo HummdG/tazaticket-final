@@ -5,12 +5,23 @@ set -e
 redis-server /app/redis.conf --daemonize yes
 echo "Redis server started"
 
-# Wait a moment for Redis to be ready
-sleep 2
+# Wait for Redis to be ready with retry logic
+echo "Waiting for Redis to be ready..."
+max_attempts=30
+attempt=1
+while [ $attempt -le $max_attempts ]; do
+    if redis-cli ping > /dev/null 2>&1; then
+        echo "Redis is ready!"
+        break
+    else
+        echo "Attempt $attempt/$max_attempts: Redis not ready yet, waiting..."
+        sleep 1
+        ((attempt++))
+    fi
+done
 
-# Check if Redis is responding
-if ! redis-cli ping; then
-    echo "Failed to connect to Redis"
+if [ $attempt -gt $max_attempts ]; then
+    echo "Failed to connect to Redis after $max_attempts attempts"
     exit 1
 fi
 
