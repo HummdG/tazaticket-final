@@ -659,8 +659,6 @@ class MemoryManager:
                     # For now, we'll just log this condition
         except Exception as e:
             print(f"[MemoryManager] Error checking Redis memory: {e}")
-            else:
-                print(f"[MemoryManager] No pairs in batch to flush for thread {thread_id}")
 
     async def flush_all(self, thread_id: str) -> None:
         """Flush all pairs (context + batch) to DynamoDB"""
