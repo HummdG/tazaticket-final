@@ -41,10 +41,22 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     BATCH_PAIRS=1 \
     MAX_RAM_PAIRS=13
 
-# Install runtime dependencies including Redis
+# Install build dependencies to compile Redis with Jemalloc support
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    redis-server \
+    build-essential \
+    tcl \
+    wget \
     && rm -rf /var/lib/apt/lists/*
+
+# Build and install Redis from source with active defrag support
+RUN wget -O /tmp/redis.tar.gz https://download.redis.io/redis-stable.tar.gz && \
+    tar -xzf /tmp/redis.tar.gz -C /tmp/ && \
+    cd /tmp/redis-stable && \
+    make BUILD_TLS=yes USE_JEMALLOC=yes && \
+    make install && \
+    mkdir -p /etc/redis && \
+    cp /tmp/redis-stable/redis.conf /etc/redis/redis.conf && \
+    rm -rf /tmp/redis-stable /tmp/redis.tar.gz
 
 # Create non-root user
 RUN useradd --create-home --shell /bin/bash app
