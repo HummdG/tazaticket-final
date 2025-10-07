@@ -67,7 +67,7 @@ async def fetch_catalog(CATALOG_URL, headers, payload):
     return response.json()
 
 @tool("TravelportSearch")
-def TravelportSearch(payload: dict, trip_type: str = "one-way"):
+async def TravelportSearch(payload: dict, trip_type: str = "one-way"):
     """This tool calls the travelport rest api to get the cheapest flight possible for the user's given parameters"""
     load_dotenv()  # Reads .env in current directory
 
@@ -82,7 +82,7 @@ def TravelportSearch(payload: dict, trip_type: str = "one-way"):
 
     # Step 1: Get token
     try:
-        token = run_async(fetch_password_token(CLIENT_ID, CLIENT_SECRET, USERNAME, PASSWORD, OAUTH_URL))
+        token = await fetch_password_token(CLIENT_ID, CLIENT_SECRET, USERNAME, PASSWORD, OAUTH_URL)
     except httpx.HTTPError as e:
         return {
             "ok": False,
@@ -109,7 +109,7 @@ def TravelportSearch(payload: dict, trip_type: str = "one-way"):
 
     # Step 2: Call catalog
     try:
-        resp_json = run_async(fetch_catalog(CATALOG_URL, headers, payload))
+        resp_json = await fetch_catalog(CATALOG_URL, headers, payload)
 
         # Extract summary
         if trip_type == "one-way":
