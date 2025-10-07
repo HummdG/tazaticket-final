@@ -46,6 +46,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     tcl \
     wget \
+    pkg-config \
+    libssl-dev \
+    libjemalloc-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Build and install Redis from source with active defrag support
