@@ -9,6 +9,7 @@ import aioboto3
 from datetime import datetime, timedelta
 from typing import Optional
 from botocore.exceptions import ClientError, NoCredentialsError
+import aiofiles
 
 
 class SecureTazaTicketS3Handler:
@@ -128,35 +129,31 @@ class SecureTazaTicketS3Handler:
             self._require_client()
 
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            file_hash = await asyncio.to_thread(
-                self._generate_file_hash, local_file_path
-            )
+            file_hash = await self._generate_file_hash_async(local_file_path)
             file_hash = file_hash[:8]
             file_extension = os.path.splitext(local_file_path)[1] or ".mp3"
             filename = f"voice/{user_id}/{timestamp}_{file_hash}{file_extension}"
             print(f"🔒 Uploading to secure TazaTicket S3: {filename}")
 
             async with self._get_s3_client() as client:
-                # Use streaming upload (better than reading full file in memory)
-                def open_file():
-                    return open(local_file_path, "rb")
-
-                with await asyncio.to_thread(open_file) as fp:
-                    await client.upload_fileobj(
-                        fp,
-                        self.bucket_name,
-                        filename,
-                        ExtraArgs={
-                            "ContentType": "audio/mpeg",
-                            "CacheControl": "max-age=3600",
-                            "Metadata": {
-                                "user-id": user_id,
-                                "created-at": datetime.now().isoformat(),
-                                "service": "tazaticket-whatsapp-bot",
-                                "type": "voice-response",
-                            },
-                        },
-                    )
+                # Read file content using aiofiles
+                async with aiofiles.open(local_file_path, "rb") as fp:
+                    file_content = await fp.read()
+                
+                # Upload using put_object instead of upload_fileobj for better async support
+                await client.put_object(
+                    Bucket=self.bucket_name,
+                    Key=filename,
+                    Body=file_content,
+                    ContentType="audio/mpeg",
+                    CacheControl="max-age=3600",
+                    Metadata={
+                        "user-id": user_id,
+                        "created-at": datetime.now().isoformat(),
+                        "service": "tazaticket-whatsapp-bot",
+                        "type": "voice-response",
+                    },
+                )
 
                 presigned_url = await client.generate_presigned_url(
                     "get_object",
@@ -190,6 +187,20 @@ class SecureTazaTicketS3Handler:
             h = hashlib.md5()
             with open(file_path, "rb") as f:
                 while chunk := f.read(8192):
+                    h.update(chunk)
+            return h.hexdigest()
+        except Exception:
+            return hashlib.md5(str(datetime.now()).encode()).hexdigest()
+
+    async def _generate_file_hash_async(self, file_path: str) -> str:
+        """Generate hash for unique file naming using async file operations"""
+        try:
+            h = hashlib.md5()
+            async with aiofiles.open(file_path, "rb") as f:
+                while True:
+                    chunk = await f.read(8192)
+                    if not chunk:
+                        break
                     h.update(chunk)
             return h.hexdigest()
         except Exception:

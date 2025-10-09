@@ -16,6 +16,7 @@ import tempfile
 from typing import Optional, Callable, Tuple, Dict, Any
 
 import httpx
+import aiofiles
 
 # ---------- Configuration for pooling / timeouts ----------
 _HTTPX_MAX_CONNECTIONS = int(os.getenv("HTTPX_MAX_CONNECTIONS", "60"))
@@ -269,16 +270,16 @@ class SpeechGenClient:
         async with self._session.stream("GET", file_url, timeout=_HTTPX_TIMEOUT) as r:
             r.raise_for_status()
             os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
-            # collect bytes then write in a threaded file write to avoid blocking the loop
+            # collect bytes then write using async file operations to avoid blocking the loop
             content = await r.aread()
-            await asyncio.to_thread(_atomic_write_bytes, output_path, content)
+            await _atomic_write_bytes_async(output_path, content)
 
         return output_path
 
 
-def _atomic_write_bytes(path: str, content: bytes) -> None:
-    with open(path, "wb") as f:
-        f.write(content)
+async def _atomic_write_bytes_async(path: str, content: bytes) -> None:
+    async with aiofiles.open(path, "wb") as f:
+        await f.write(content)
 
 
 # ---------- Speech Processor ----------

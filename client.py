@@ -94,50 +94,50 @@ def main():
     print()
     
     # Test 1: Send a simple text message
-    print("Test 1: Sending text message...")
-    response = client.send_text_message("Hello, this is a test message!")
-    print(f"Response status: {response.status_code}")
-    print(f"Response content: {response.text}")
-    print()
+    # print("Test 1: Sending text message...")
+    # response = client.send_text_message("Hello, this is a test message!")
+    # print(f"Response status: {response.status_code}")
+    # print(f"Response content: {response.text}")
+    # print()
     
-    time.sleep(1)  # Pause between requests
+    # time.sleep(1)  # Pause between requests
     
-    # Test 2: Send a longer message
-    print("Test 2: Sending longer message...")
-    response = client.send_text_message("This is a longer test message to see how the system handles more complex inputs and processes them correctly through the LangGraph implementation.")
-    print(f"Response status: {response.status_code}")
-    print(f"Response content: {response.text}")
-    print()
+    # # Test 2: Send a longer message
+    # print("Test 2: Sending longer message...")
+    # response = client.send_text_message("This is a longer test message to see how the system handles more complex inputs and processes them correctly through the LangGraph implementation.")
+    # print(f"Response status: {response.status_code}")
+    # print(f"Response content: {response.text}")
+    # print()
     
-    time.sleep(1)  # Pause between requests
+    # time.sleep(1)  # Pause between requests
     
     # Test 3: Send a message with non-English text (to test translation)
-    print("Test 3: Sending message in Spanish (to test translation)...")
-    response = client.send_text_message("Hola, ¿cómo estás?", from_number="whatsapp:+34678901234", wa_id="whatsapp+34678901234")
+    print("Test 3: Sending message in roman Urdu (to test translation)...")
+    response = client.send_text_message("Mjhy islamabad to dxb flight, December mid mien chahiye", from_number="whatsapp:+34678901234", wa_id="whatsapp+34678901234")
     print(f"Response status: {response.status_code}")
     print(f"Response content: {response.text}")
     print()
     
     time.sleep(1)  # Pause between requests
     
-    # Test 4: Try sending a voice message (with a placeholder URL)
-    print("Test 4: Sending voice message (with placeholder URL)...")
-    # response = client.send_voice_message("https://example.com/audio.ogg")
-    print(f"Response status: {response.status_code}")
-    print(f"Response content: {response.text}")
+    # # Test 4: Try sending a voice message (with a placeholder URL)
+    # print("Test 4: Sending voice message (with placeholder URL)...")
+    # # response = client.send_voice_message("https://example.com/audio.ogg")
+    # print(f"Response status: {response.status_code}")
+    # print(f"Response content: {response.text}")
 
 
     
-    print()
+    # print()
     
-    time.sleep(1)  # Pause between requests
+    # time.sleep(1)  # Pause between requests
     
-    # Test 5: Try sending unsupported media (to test rejection logic)
-    print("Test 5: Sending unsupported media (to test rejection)...")
-    response = client.send_unsupported_media("https://example.com/image.jpg")
-    print(f"Response status: {response.status_code}")
-    print(f"Response content: {response.text}")
-    print()
+    # # Test 5: Try sending unsupported media (to test rejection logic)
+    # print("Test 5: Sending unsupported media (to test rejection)...")
+    # response = client.send_unsupported_media("https://example.com/image.jpg")
+    # print(f"Response status: {response.status_code}")
+    # print(f"Response content: {response.text}")
+    # print()
 
 
 if __name__ == "__main__":
