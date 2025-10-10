@@ -112,14 +112,14 @@ async def process_text_message_background(user_message: str, thread_id: str, fro
         else:
             print(f"[{time.strftime('%H:%M:%S')}] [TextProcessor] Translation: Successfully translated to English for {thread_id}", flush=True)
         
-        # 2) Run LangGraph (sync functions run in thread)
+        # 2) Run LangGraph (async)
         print(f"[{time.strftime('%H:%M:%S')}] [TextProcessor] LangGraph: Starting invocation for {thread_id}", flush=True)
         from app.langgraph import create_graph, invoke_graph, extract_last_ai_text
         graph = await asyncio.to_thread(create_graph)
         print(f"[{time.strftime('%H:%M:%S')}] [TextProcessor] LangGraph: Graph created successfully for {thread_id}", flush=True)
-        state = await asyncio.to_thread(invoke_graph, graph, english_text, thread_id, detected_language=detected_language)
+        state = await invoke_graph(graph, english_text, thread_id, detected_language=detected_language)
         print(f"[{time.strftime('%H:%M:%S')}] [TextProcessor] LangGraph: Graph invocation completed for {thread_id}", flush=True)
-        reply_text = await asyncio.to_thread(extract_last_ai_text, state) or "Got it."
+        reply_text = extract_last_ai_text(state) or "Got it."
         print(f"[{time.strftime('%H:%M:%S')}] [TextProcessor] LangGraph: Extracted AI response for {thread_id}: '{reply_text[:50]}...'", flush=True)
         
         # 3) Translate back to detected language if needed

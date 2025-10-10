@@ -732,14 +732,14 @@ async def process_voice_message_background(media_url: str, thread_id: str, from_
         else:
             print(f"[{time.strftime('%H:%M:%S')}] [VoiceProcessor] Translation: No translation needed, already in English for {thread_id}", flush=True)
 
-        # 3) Run LangGraph (sync functions run in thread)
+        # 3) Run LangGraph (async)
         print(f"[{time.strftime('%H:%M:%S')}] [VoiceProcessor] LangGraph: Starting invocation for {thread_id}", flush=True)
         from app.langgraph import create_graph, invoke_graph, extract_last_ai_text
         graph = await asyncio.to_thread(create_graph)
         print(f"[{time.strftime('%H:%M:%S')}] [VoiceProcessor] LangGraph: Graph created successfully for {thread_id}", flush=True)
-        state = await asyncio.to_thread(invoke_graph, graph, english_text, thread_id, True, detected_language)
+        state = await invoke_graph(graph, english_text, thread_id, True, detected_language)
         print(f"[{time.strftime('%H:%M:%S')}] [VoiceProcessor] LangGraph: Graph invocation completed for {thread_id}", flush=True)
-        reply_text = await asyncio.to_thread(extract_last_ai_text, state) or "Got it."
+        reply_text = extract_last_ai_text(state) or "Got it."
         print(f"[{time.strftime('%H:%M:%S')}] [VoiceProcessor] LangGraph: Extracted AI response for {thread_id}: '{reply_text[:50]}...'", flush=True)
 
         # 4) Translate back if needed (except Punjabi — handled in TTS pipeline)
