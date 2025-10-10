@@ -1389,6 +1389,8 @@ def execute_bulk_search_background(**kwargs):
     # Since this is called from background thread, we need to handle async operations properly
     async def _async_execute():
         try:
+            import sys
+            import time
             origin = kwargs.get("origin") or kwargs.get("from") or kwargs.get("orig")
             destination = kwargs.get("destination") or kwargs.get("to") or kwargs.get("dest")
             dates = kwargs.get("dates") or kwargs.get("date_list") or []
@@ -1400,7 +1402,7 @@ def execute_bulk_search_background(**kwargs):
 
             # Basic validation
             if not origin or not destination or not dates:
-                print("[BulkSearch] execute_bulk_search_background missing required params")
+                print(f"[{time.strftime('%H:%M:%S')}] [BulkSearch] execute_bulk_search_background missing required params", flush=True)
                 return
 
             search_key = f"{notify_thread_id}:{origin}:{destination}"
@@ -1409,7 +1411,7 @@ def execute_bulk_search_background(**kwargs):
             from .travelport_utils import _add_active_search
             await _add_active_search(search_key)
             
-            print(f"[BulkSearch] execute_bulk_search_background starting: {origin}->{destination}, {len(dates)} dates")
+            print(f"[{time.strftime('%H:%M:%S')}] [BulkSearch] execute_bulk_search_background starting: {origin}->{destination}, {len(dates)} dates", flush=True)
 
             # Run the synchronous bulk search in this background thread (so it can call sync libs)
             result = bulk_search_cheapest_sync(origin, destination, dates, number_of_passengers, carriers, trip_type=trip_type)
@@ -1426,7 +1428,7 @@ def execute_bulk_search_background(**kwargs):
                 elif store_if_no_contact:
                     # store pending in case no immediate contact
                     store_pending_message(str(notify_thread_id or "unknown"), short)
-                print("[BulkSearch] execute_bulk_search_background completed with no results")
+                print(f"[{time.strftime('%H:%M:%S')}] [BulkSearch] execute_bulk_search_background completed with no results", flush=True)
                 return
 
             cheapest = result.get("cheapest_result")
@@ -1474,17 +1476,18 @@ def execute_bulk_search_background(**kwargs):
                 if store_if_no_contact:
                     store_pending_message("unknown", message)
 
-            print("[BulkSearch] execute_bulk_search_background finished and notification sent/stored")
+            print(f"[{time.strftime('%H:%M:%S')}] [BulkSearch] execute_bulk_search_background finished and notification sent/stored", flush=True)
         except Exception as e:
             # Even in async context, make sure to remove from active searches
             try:
+                import time
                 search_key = f"{kwargs.get('thread_id', 'unknown')}:{kwargs.get('origin', 'unknown')}:{kwargs.get('destination', 'unknown')}"
                 from .travelport_utils import _remove_active_search
                 await _remove_active_search(search_key)
             except:
                 pass  # Ignore errors in cleanup
-            print(f"[BulkSearch] execute_bulk_search_background failed: {e}")
-    
+            print(f"[{time.strftime('%H:%M:%S')}] [BulkSearch] execute_bulk_search_background failed: {e}", flush=True)
+
     # Run the async execution in a new event loop since this function is called from a thread
     import asyncio
     return asyncio.run(_async_execute())

@@ -95,56 +95,59 @@ def queue_text_processing(user_message: str, thread_id: str, from_number: str, d
 
 async def process_text_message_background(user_message: str, thread_id: str, from_number: str, detected_language: str):
     """Async processing pipeline for a single non-English text message."""
+    import sys
+    import time
     try:
-        print(f"[TextProcessor] Starting background processing for {thread_id} from {from_number} in {detected_language}")
+        print(f"[{time.strftime('%H:%M:%S')}] [TextProcessor] Starting background processing for {thread_id} from {from_number} in {detected_language}", flush=True)
         
         # 1) Use the original text for translation to English 
-        print(f"[TextProcessor] Translation: Starting translation to English for {thread_id}")
+        print(f"[{time.strftime('%H:%M:%S')}] [TextProcessor] Translation: Starting translation to English for {thread_id}", flush=True)
         translation_service = app.state.translation_service
         _, english_text = await translation_service.detect_and_translate_to_english(user_message)
         if english_text is None:
             # Translation failed, use original text
             english_text = user_message
-            print(f"[TextProcessor] Translation: Translation failed for {thread_id}, using original text")
+            print(f"[{time.strftime('%H:%M:%S')}] [TextProcessor] Translation: Translation failed for {thread_id}, using original text", flush=True)
         else:
-            print(f"[TextProcessor] Translation: Successfully translated to English for {thread_id}")
+            print(f"[{time.strftime('%H:%M:%S')}] [TextProcessor] Translation: Successfully translated to English for {thread_id}", flush=True)
         
         # 2) Run LangGraph (sync functions run in thread)
-        print(f"[TextProcessor] LangGraph: Starting invocation for {thread_id}")
+        print(f"[{time.strftime('%H:%M:%S')}] [TextProcessor] LangGraph: Starting invocation for {thread_id}", flush=True)
         from app.langgraph import create_graph, invoke_graph, extract_last_ai_text
         graph = await asyncio.to_thread(create_graph)
-        print(f"[TextProcessor] LangGraph: Graph created successfully for {thread_id}")
+        print(f"[{time.strftime('%H:%M:%S')}] [TextProcessor] LangGraph: Graph created successfully for {thread_id}", flush=True)
         state = await asyncio.to_thread(invoke_graph, graph, english_text, thread_id, detected_language=detected_language)
-        print(f"[TextProcessor] LangGraph: Graph invocation completed for {thread_id}")
+        print(f"[{time.strftime('%H:%M:%S')}] [TextProcessor] LangGraph: Graph invocation completed for {thread_id}", flush=True)
         reply_text = await asyncio.to_thread(extract_last_ai_text, state) or "Got it."
-        print(f"[TextProcessor] LangGraph: Extracted AI response for {thread_id}: '{reply_text[:50]}...'")
+        print(f"[{time.strftime('%H:%M:%S')}] [TextProcessor] LangGraph: Extracted AI response for {thread_id}: '{reply_text[:50]}...'", flush=True)
         
         # 3) Translate back to detected language if needed
-        print(f"[TextProcessor] Reverse Translation: Starting for {thread_id}")
+        print(f"[{time.strftime('%H:%M:%S')}] [TextProcessor] Reverse Translation: Starting for {thread_id}", flush=True)
         if detected_language != "en":
             try:
                 translated_reply = await translation_service.translate_from_english(reply_text, detected_language)
                 if translated_reply:
                     reply_text = translated_reply
-                    print(f"[TextProcessor] Reverse Translation: Successfully translated back to {detected_language} for {thread_id}")
+                    print(f"[{time.strftime('%H:%M:%S')}] [TextProcessor] Reverse Translation: Successfully translated back to {detected_language} for {thread_id}", flush=True)
                 else:
-                    print(f"[TextProcessor] Reverse Translation: No translation returned for {thread_id}, keeping English response")
+                    print(f"[{time.strftime('%H:%M:%S')}] [TextProcessor] Reverse Translation: No translation returned for {thread_id}, keeping English response", flush=True)
             except Exception as e:
-                print(f"[TextProcessor] Reverse Translation: Exception occurred while translating back for {thread_id}: {e}")
+                print(f"[{time.strftime('%H:%M:%S')}] [TextProcessor] Reverse Translation: Exception occurred while translating back for {thread_id}: {e}", flush=True)
         else:
-            print(f"[TextProcessor] Reverse Translation: No reverse translation needed for {thread_id}, already English")
+            print(f"[{time.strftime('%H:%M:%S')}] [TextProcessor] Reverse Translation: No reverse translation needed for {thread_id}, already English", flush=True)
         
         # 4) Send response via Twilio (async HTTP)
-        print(f"[TextProcessor] Twilio: Starting response sending for {thread_id}")
+        print(f"[{time.strftime('%H:%M:%S')}] [TextProcessor] Twilio: Starting response sending for {thread_id}", flush=True)
         from app.speech.speech_processor import send_twilio_message
         await send_twilio_message(from_number, reply_text, thread_id)
-        print(f"[TextProcessor] Completed processing for {thread_id}")
+        print(f"[{time.strftime('%H:%M:%S')}] [TextProcessor] Completed processing for {thread_id}", flush=True)
         
     except Exception as e:
         import traceback
-        print(f"[TextProcessor] Background processing error for {thread_id}: {e}")
-        print(f"[TextProcessor] Error traceback for {thread_id}:")
+        print(f"[{time.strftime('%H:%M:%S')}] [TextProcessor] Background processing error for {thread_id}: {e}", flush=True)
+        print(f"[{time.strftime('%H:%M:%S')}] [TextProcessor] Error traceback for {thread_id}:", flush=True)
         traceback.print_exc()
+        sys.stdout.flush()  # Ensure error output is flushed
         from app.speech.speech_processor import send_twilio_message
         await send_twilio_message(from_number, "Sorry, there was an error processing your message.", thread_id)
 
@@ -238,6 +241,36 @@ async def twilio_whatsapp(
         </Response>"""
     
     return Response(content=twiml, media_type="application/xml")
+
+async def test_background_logging():
+    """Test function to verify that background tasks are properly logging"""
+    import time
+    import asyncio
+    
+    print(f"[{time.strftime('%H:%M:%S')}] Starting background logging test...", flush=True)
+    
+    # Test the voice message processing (would need an actual audio URL to fully test)
+    # For now, we'll just test the task queuing mechanism
+    print(f"[{time.strftime('%H:%M:%S')}] Queuing a test voice processing task...", flush=True)
+    task_future = queue_voice_task(process_voice_message_background, 
+                                  "https://example.com/test-audio.mp3", 
+                                  "test-thread-123", 
+                                  "whatsapp:+1234567890")
+    print(f"[{time.strftime('%H:%M:%S')}] Voice processing task queued successfully", flush=True)
+    
+    # Test the text message processing
+    print(f"[{time.strftime('%H:%M:%S')}] Queuing a test text processing task...", flush=True)
+    text_task_future = queue_voice_task(process_text_message_background,
+                                        "Hello, this is a test message.",
+                                        "test-thread-456",
+                                        "whatsapp:+1234567890",
+                                        "es")  # Spanish
+    print(f"[{time.strftime('%H:%M:%S')}] Text processing task queued successfully", flush=True)
+    
+    # Wait a bit to see the logs
+    await asyncio.sleep(2)
+    print(f"[{time.strftime('%H:%M:%S')}] Background logging test completed", flush=True)
+
 
 if __name__ == "__main__":
     import uvicorn

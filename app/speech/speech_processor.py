@@ -592,46 +592,49 @@ _voice_worker_running = False
 
 async def _voice_worker_loop():
     """Coroutine that consumes tasks placed into _voice_async_queue."""
+    import sys
     global _voice_worker_running
     _voice_worker_running = True
-    print("[VoiceProcessor] async worker loop started")
+    print(f"[{time.strftime('%H:%M:%S')}] [VoiceProcessor] async worker loop started", flush=True)
     q = _voice_async_queue
     while _voice_worker_running:
         try:
-            print("[VoiceProcessor] Worker waiting for next task...")
+            print(f"[{time.strftime('%H:%M:%S')}] [VoiceProcessor] Worker waiting for next task...", flush=True)
             task_func, args, kwargs = await q.get()
             task_name = getattr(task_func, '__name__', str(task_func))
-            print(f"[VoiceProcessor] Worker received task: {task_name}, args: {args[:2]}...")  # Only show first 2 args to avoid sensitive info
+            print(f"[{time.strftime('%H:%M:%S')}] [VoiceProcessor] Worker received task: {task_name}, args: {args[:2]}...", flush=True)  # Only show first 2 args to avoid sensitive info
             try:
                 if inspect.iscoroutinefunction(task_func):
-                    print(f"[VoiceProcessor] Executing async task: {task_name}")
+                    print(f"[{time.strftime('%H:%M:%S')}] [VoiceProcessor] Executing async task: {task_name}", flush=True)
                     await task_func(*args, **kwargs)
-                    print(f"[VoiceProcessor] Completed async task: {task_name}")
+                    print(f"[{time.strftime('%H:%M:%S')}] [VoiceProcessor] Completed async task: {task_name}", flush=True)
                 else:
                     # run sync function in threadpool
-                    print(f"[VoiceProcessor] Executing sync task: {task_name}")
+                    print(f"[{time.strftime('%H:%M:%S')}] [VoiceProcessor] Executing sync task: {task_name}", flush=True)
                     await asyncio.to_thread(task_func, *args, **kwargs)
-                    print(f"[VoiceProcessor] Completed sync task: {task_name}")
+                    print(f"[{time.strftime('%H:%M:%S')}] [VoiceProcessor] Completed sync task: {task_name}", flush=True)
             except Exception as e:
                 import traceback
-                print(f"[VoiceProcessor] Error while executing task {task_name}: {e}")
-                print(f"[VoiceProcessor] Error traceback for task {task_name}:")
+                print(f"[{time.strftime('%H:%M:%S')}] [VoiceProcessor] Error while executing task {task_name}: {e}", flush=True)
+                print(f"[{time.strftime('%H:%M:%S')}] [VoiceProcessor] Error traceback for task {task_name}:", flush=True)
                 traceback.print_exc()
+                sys.stdout.flush()  # Ensure error output is flushed
             finally:
                 q.task_done()
-                print(f"[VoiceProcessor] Task {task_name} marked as done")
+                print(f"[{time.strftime('%H:%M:%S')}] [VoiceProcessor] Task {task_name} marked as done", flush=True)
         except asyncio.CancelledError:
-            print("[VoiceProcessor] Worker loop received cancellation")
+            print(f"[{time.strftime('%H:%M:%S')}] [VoiceProcessor] Worker loop received cancellation", flush=True)
             break
         except Exception as e:
             import traceback
-            print(f"[VoiceProcessor] Worker loop exception: {e}")
-            print("[VoiceProcessor] Worker loop traceback:")
+            print(f"[{time.strftime('%H:%M:%S')}] [VoiceProcessor] Worker loop exception: {e}", flush=True)
+            print(f"[{time.strftime('%H:%M:%S')}] [VoiceProcessor] Worker loop traceback:", flush=True)
             traceback.print_exc()
+            sys.stdout.flush()  # Ensure error output is flushed
             await asyncio.sleep(0.5)
 
     _voice_worker_running = False
-    print("[VoiceProcessor] async worker loop stopped")
+    print(f"[{time.strftime('%H:%M:%S')}] [VoiceProcessor] async worker loop stopped", flush=True)
 
 
 def _start_voice_loop_in_thread():
@@ -696,20 +699,21 @@ async def process_voice_message_background(media_url: str, thread_id: str, from_
     Async processing pipeline for a single voice message. Use queue_voice_task(process_voice_message_background, ...)
     to schedule it.
     """
+    import sys
     try:
-        print(f"[VoiceProcessor] Starting background processing for {thread_id} from {from_number}")
+        print(f"[{time.strftime('%H:%M:%S')}] [VoiceProcessor] Starting background processing for {thread_id} from {from_number}", flush=True)
         
         # 1) STT
-        print(f"[VoiceProcessor] STT: Starting speech-to-text conversion for {thread_id}")
+        print(f"[{time.strftime('%H:%M:%S')}] [VoiceProcessor] STT: Starting speech-to-text conversion for {thread_id}", flush=True)
         transcribed_text, detected_language = await speech_processor.speech_to_text_direct(media_url, thread_id)
         if not transcribed_text:
-            print(f"[VoiceProcessor] STT: Failed to transcribe audio for {thread_id}, sending error message")
+            print(f"[{time.strftime('%H:%M:%S')}] [VoiceProcessor] STT: Failed to transcribe audio for {thread_id}, sending error message", flush=True)
             await send_twilio_message(from_number, "Sorry, I couldn't understand the voice message.", thread_id)
             return
-        print(f"[VoiceProcessor] STT: Successfully transcribed audio for {thread_id}, detected language: {detected_language}")
+        print(f"[{time.strftime('%H:%M:%S')}] [VoiceProcessor] STT: Successfully transcribed audio for {thread_id}, detected language: {detected_language}", flush=True)
 
         # 2) Translate to English if needed (sync translation helper run in thread)
-        print(f"[VoiceProcessor] Translation: Starting translation to English if needed for {thread_id}")
+        print(f"[{time.strftime('%H:%M:%S')}] [VoiceProcessor] Translation: Starting translation to English if needed for {thread_id}", flush=True)
         english_text = transcribed_text
         if detected_language != "en":
             try:
@@ -718,28 +722,28 @@ async def process_voice_message_background(media_url: str, thread_id: str, from_
                 _, translated_text = await temp_translation_service.detect_and_translate_to_english(transcribed_text)
                 if translated_text:
                     english_text = translated_text
-                    print(f"[VoiceProcessor] Translation: Successfully translated to English for {thread_id}")
+                    print(f"[{time.strftime('%H:%M:%S')}] [VoiceProcessor] Translation: Successfully translated to English for {thread_id}", flush=True)
                 else:
                     english_text = transcribed_text
-                    print(f"[VoiceProcessor] Translation: Translation returned empty for {thread_id} — using original text")
+                    print(f"[{time.strftime('%H:%M:%S')}] [VoiceProcessor] Translation: Translation returned empty for {thread_id} — using original text", flush=True)
             except Exception as e:
-                print(f"[VoiceProcessor] Translation: Exception occurred while translating for {thread_id}: {e}")
+                print(f"[{time.strftime('%H:%M:%S')}] [VoiceProcessor] Translation: Exception occurred while translating for {thread_id}: {e}", flush=True)
                 english_text = transcribed_text
         else:
-            print(f"[VoiceProcessor] Translation: No translation needed, already in English for {thread_id}")
+            print(f"[{time.strftime('%H:%M:%S')}] [VoiceProcessor] Translation: No translation needed, already in English for {thread_id}", flush=True)
 
         # 3) Run LangGraph (sync functions run in thread)
-        print(f"[VoiceProcessor] LangGraph: Starting invocation for {thread_id}")
+        print(f"[{time.strftime('%H:%M:%S')}] [VoiceProcessor] LangGraph: Starting invocation for {thread_id}", flush=True)
         from app.langgraph import create_graph, invoke_graph, extract_last_ai_text
         graph = await asyncio.to_thread(create_graph)
-        print(f"[VoiceProcessor] LangGraph: Graph created successfully for {thread_id}")
+        print(f"[{time.strftime('%H:%M:%S')}] [VoiceProcessor] LangGraph: Graph created successfully for {thread_id}", flush=True)
         state = await asyncio.to_thread(invoke_graph, graph, english_text, thread_id, True, detected_language)
-        print(f"[VoiceProcessor] LangGraph: Graph invocation completed for {thread_id}")
+        print(f"[{time.strftime('%H:%M:%S')}] [VoiceProcessor] LangGraph: Graph invocation completed for {thread_id}", flush=True)
         reply_text = await asyncio.to_thread(extract_last_ai_text, state) or "Got it."
-        print(f"[VoiceProcessor] LangGraph: Extracted AI response for {thread_id}: '{reply_text[:50]}...'")
+        print(f"[{time.strftime('%H:%M:%S')}] [VoiceProcessor] LangGraph: Extracted AI response for {thread_id}: '{reply_text[:50]}...'", flush=True)
 
         # 4) Translate back if needed (except Punjabi — handled in TTS pipeline)
-        print(f"[VoiceProcessor] Reverse Translation: Starting if needed for {thread_id}")
+        print(f"[{time.strftime('%H:%M:%S')}] [VoiceProcessor] Reverse Translation: Starting if needed for {thread_id}", flush=True)
         if detected_language != "en" and detected_language not in ("pa", "pa_in", "pa_pk"):
             try:
                 from app.services.translation_service import TranslationService
@@ -747,59 +751,60 @@ async def process_voice_message_background(media_url: str, thread_id: str, from_
                 translated_reply = await temp_translation_service.translate_from_english(reply_text, detected_language)
                 if translated_reply:
                     reply_text = translated_reply
-                    print(f"[VoiceProcessor] Reverse Translation: Successfully translated back to {detected_language} for {thread_id}")
+                    print(f"[{time.strftime('%H:%M:%S')}] [VoiceProcessor] Reverse Translation: Successfully translated back to {detected_language} for {thread_id}", flush=True)
                 else:
-                    print(f"[VoiceProcessor] Reverse Translation: No translation returned for {thread_id}, keeping English response")
+                    print(f"[{time.strftime('%H:%M:%S')}] [VoiceProcessor] Reverse Translation: No translation returned for {thread_id}, keeping English response", flush=True)
             except Exception as e:
-                print(f"[VoiceProcessor] Reverse Translation: Exception occurred while translating back for {thread_id}: {e}")
+                print(f"[{time.strftime('%H:%M:%S')}] [VoiceProcessor] Reverse Translation: Exception occurred while translating back for {thread_id}: {e}", flush=True)
         else:
-            print(f"[VoiceProcessor] Reverse Translation: No reverse translation needed for {thread_id} (Punjabi handled in TTS or already English)")
+            print(f"[{time.strftime('%H:%M:%S')}] [VoiceProcessor] Reverse Translation: No reverse translation needed for {thread_id} (Punjabi handled in TTS or already English)", flush=True)
 
         # 5) TTS (async)
-        print(f"[VoiceProcessor] TTS: Starting text-to-speech conversion for {thread_id}")
+        print(f"[{time.strftime('%H:%M:%S')}] [VoiceProcessor] TTS: Starting text-to-speech conversion for {thread_id}", flush=True)
         audio_file_path = await speech_processor.text_to_speech_async(reply_text, detected_language, thread_id)
         if not audio_file_path:
-            print(f"[VoiceProcessor] TTS: Failed to generate audio, sending text response for {thread_id}")
+            print(f"[{time.strftime('%H:%M:%S')}] [VoiceProcessor] TTS: Failed to generate audio, sending text response for {thread_id}", flush=True)
             await send_twilio_message(from_number, reply_text, thread_id)
             return
-        print(f"[VoiceProcessor] TTS: Successfully generated audio file for {thread_id}: {audio_file_path}")
+        print(f"[{time.strftime('%H:%M:%S')}] [VoiceProcessor] TTS: Successfully generated audio file for {thread_id}: {audio_file_path}", flush=True)
 
         # 6) Upload to S3 (sync helper run in thread)
-        print(f"[VoiceProcessor] S3: Starting upload for {thread_id}")
+        print(f"[{time.strftime('%H:%M:%S')}] [VoiceProcessor] S3: Starting upload for {thread_id}", flush=True)
         try:
             from app.services.s3_handler import secure_tazaticket_s3
             presigned_url = await asyncio.to_thread(secure_tazaticket_s3.upload_voice_file, audio_file_path, thread_id)
             if presigned_url:
-                print(f"[VoiceProcessor] S3: Successfully uploaded to S3 for {thread_id}: {presigned_url[:50]}...")
+                print(f"[{time.strftime('%H:%M:%S')}] [VoiceProcessor] S3: Successfully uploaded to S3 for {thread_id}: {presigned_url[:50]}...", flush=True)
             else:
-                print(f"[VoiceProcessor] S3: Failed to get presigned URL for {thread_id}")
+                print(f"[{time.strftime('%H:%M:%S')}] [VoiceProcessor] S3: Failed to get presigned URL for {thread_id}", flush=True)
         except Exception as e:
-            print(f"[VoiceProcessor] S3: Exception occurred during upload for {thread_id}: {e}")
+            print(f"[{time.strftime('%H:%M:%S')}] [VoiceProcessor] S3: Exception occurred during upload for {thread_id}: {e}", flush=True)
             presigned_url = None
 
         # cleanup
-        print(f"[VoiceProcessor] Cleanup: Removing temporary audio file for {thread_id}")
+        print(f"[{time.strftime('%H:%M:%S')}] [VoiceProcessor] Cleanup: Removing temporary audio file for {thread_id}", flush=True)
         try:
             await asyncio.to_thread(os.unlink, audio_file_path)
-            print(f"[VoiceProcessor] Cleanup: Successfully removed temporary file for {thread_id}")
+            print(f"[{time.strftime('%H:%M:%S')}] [VoiceProcessor] Cleanup: Successfully removed temporary file for {thread_id}", flush=True)
         except Exception as e:
-            print(f"[VoiceProcessor] Cleanup: Failed to remove temporary file for {thread_id}: {e}")
+            print(f"[{time.strftime('%H:%M:%S')}] [VoiceProcessor] Cleanup: Failed to remove temporary file for {thread_id}: {e}", flush=True)
 
         # 7) Send voice response (Twilio async HTTP)
-        print(f"[VoiceProcessor] Twilio: Starting response sending for {thread_id}")
+        print(f"[{time.strftime('%H:%M:%S')}] [VoiceProcessor] Twilio: Starting response sending for {thread_id}", flush=True)
         if presigned_url:
-            print(f"[VoiceProcessor] Twilio: Sending voice message to {from_number} for {thread_id}")
+            print(f"[{time.strftime('%H:%M:%S')}] [VoiceProcessor] Twilio: Sending voice message to {from_number} for {thread_id}", flush=True)
             await send_twilio_voice_message(from_number, presigned_url, thread_id)
         else:
-            print(f"[VoiceProcessor] Twilio: Sending text message to {from_number} for {thread_id}")
+            print(f"[{time.strftime('%H:%M:%S')}] [VoiceProcessor] Twilio: Sending text message to {from_number} for {thread_id}", flush=True)
             await send_twilio_message(from_number, reply_text, thread_id)
-        print(f"[VoiceProcessor] Completed processing for {thread_id}")
+        print(f"[{time.strftime('%H:%M:%S')}] [VoiceProcessor] Completed processing for {thread_id}", flush=True)
 
     except Exception as e:
         import traceback
-        print(f"[VoiceProcessor] Background processing error for {thread_id}: {e}")
-        print(f"[VoiceProcessor] Error traceback for {thread_id}:")
+        print(f"[{time.strftime('%H:%M:%S')}] [VoiceProcessor] Background processing error for {thread_id}: {e}", flush=True)
+        print(f"[{time.strftime('%H:%M:%S')}] [VoiceProcessor] Error traceback for {thread_id}:", flush=True)
         traceback.print_exc()
+        sys.stdout.flush()  # Ensure error output is flushed
         await send_twilio_message(from_number, "Sorry, there was an error processing your voice message.", thread_id)
 
 
