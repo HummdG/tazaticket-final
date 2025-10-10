@@ -115,7 +115,7 @@ async def process_text_message_background(user_message: str, thread_id: str, fro
         # 2) Run LangGraph (async)
         print(f"[{time.strftime('%H:%M:%S')}] [TextProcessor] LangGraph: Starting invocation for {thread_id}", flush=True)
         from app.langgraph import create_graph, invoke_graph, extract_last_ai_text
-        graph = await asyncio.to_thread(create_graph)
+        graph = create_graph()  # Create graph synchronously
         print(f"[{time.strftime('%H:%M:%S')}] [TextProcessor] LangGraph: Graph created successfully for {thread_id}", flush=True)
         state = await invoke_graph(graph, english_text, thread_id, detected_language=detected_language)
         print(f"[{time.strftime('%H:%M:%S')}] [TextProcessor] LangGraph: Graph invocation completed for {thread_id}", flush=True)
