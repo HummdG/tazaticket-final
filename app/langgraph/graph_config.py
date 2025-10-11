@@ -213,6 +213,9 @@ async def invoke_graph(graph, user_message: str, thread_id: str = "default", is_
     print(f"[GraphConfig] Full config: {config}")
     
     # Invoke the graph with the full context
+    # Set a reasonable recursion limit to prevent infinite loops while allowing complex interactions
+    config["recursion_limit"] = 15  # Reduced from 50 to prevent excessive looping
+    
     state = await graph.ainvoke(
         {"messages": langchain_messages},
         config,
