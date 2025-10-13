@@ -996,7 +996,13 @@ async def _enqueue_redis_task(task_func_name: str, *args, **kwargs) -> str:
 
 async def _process_redis_task_queue():
     """Process tasks from Redis queue"""
-    redis_conn = await _get_redis_queue_connection()
+    print("[RedisQueue] Task processor starting up...")
+    try:
+        redis_conn = await _get_redis_queue_connection()
+        print("[RedisQueue] Connected to Redis for task processing")
+    except Exception as e:
+        print(f"[RedisQueue] Failed to connect to Redis: {e}")
+        return
     
     while True:
         try:
@@ -1009,6 +1015,7 @@ async def _process_redis_task_queue():
                 # Get task payload
                 task_data = await redis_conn.get(f"task:{task_id}")
                 if not task_data:
+                    print(f"[RedisQueue] Task {task_id} payload not found, skipping")
                     continue
                 
                 task = json.loads(task_data)
@@ -1024,9 +1031,21 @@ async def _process_redis_task_queue():
                     # Import the function dynamically (simplified - in real implementation you'd have a registry)
                     if task['func_name'] == 'execute_bulk_search_background':
                         # Extract actual function from this module
-                        result = execute_bulk_search_background(*task['args'], **task['kwargs'])
+                        print(f"[RedisQueue] Executing bulk search task {task_id} with params: origin={task['args'][0]}, dest={task['args'][1]}, dates={len(task['args'][2])} dates")
+                        
+                        # Since execute_bulk_search_background handles its own async context,
+                        # and we're in an async context here, we need to handle this properly
+                        # The function is designed to run in a thread context, so we'll run it in a thread
+                        import concurrent.futures
+                        def run_bulk_search():
+                            return execute_bulk_search_background(*task['args'], **task['kwargs'])
+                        
+                        loop = asyncio.get_event_loop()
+                        result = await loop.run_in_executor(None, run_bulk_search)
+                        
                         task['status'] = 'completed'
                         task['result'] = result
+                        print(f"[RedisQueue] Bulk search task {task_id} completed")
                     else:
                         print(f"[RedisQueue] Unknown function: {task['func_name']}")
                         task['status'] = 'failed'
@@ -1060,10 +1079,15 @@ async def _process_redis_task_queue():
             break
         except Exception as e:
             print(f"[RedisQueue] Error processing task queue: {e}")
+            import traceback
+            print(f"[RedisQueue] Traceback: {traceback.format_exc()}")
             await asyncio.sleep(1)  # Brief pause before continuing
 
 # Task queue processor task
 _task_processor_task = None
+
+# Flag to track whether we've attempted to start the Redis processor
+_redis_processor_started = False
 
 # Async task execution functions
 async def run_bulk_search_task(origin: str, destination: str, dates: List[str], 
@@ -1167,17 +1191,29 @@ def _background_worker():
 
 def start_background_worker():
     """Start the background worker thread"""
-    global _worker_running, _worker_thread, _task_processor_task
+    global _worker_running, _worker_thread, _task_processor_task, _redis_processor_started
     if not _worker_running:
         _worker_running = True
         _worker_thread = threading.Thread(target=_background_worker, daemon=True)
         _worker_thread.start()
         print("[BulkSearch] Background worker thread started")
-        
-        # Also start the Redis-based task processor
-        if _task_processor_task is None or _task_processor_task.done():
-            _task_processor_task = asyncio.create_task(_process_redis_task_queue())
-            print("[RedisQueue] Redis task processor started")
+
+    # Try to start Redis-based task processor, but handle the case where there's no event loop yet
+    if not _redis_processor_started:
+        try:
+            # Check if we're in an event loop
+            loop = asyncio.get_running_loop()
+            # If we get here, there's an active event loop
+            if _task_processor_task is None or _task_processor_task.done():
+                _task_processor_task = asyncio.create_task(_process_redis_task_queue())
+                _redis_processor_started = True
+                print(f"[RedisQueue] Redis task processor started with task: {_task_processor_task}")
+            else:
+                print(f"[RedisQueue] Task processor already running: {_task_processor_task}")
+        except RuntimeError:
+            # No event loop running yet, will start later when needed
+            print("[RedisQueue] No event loop running yet; Redis task processor will start when first task is processed")
+            # We'll start it later when needed
 
 def stop_background_worker():
     """Stop the background worker thread"""
@@ -1194,8 +1230,21 @@ def stop_background_worker():
         
         print("[BulkSearch] Background worker stopped")
 
+async def ensure_redis_processor_running():
+    """Ensure the Redis task processor is running"""
+    global _task_processor_task, _redis_processor_started
+    
+    if not _redis_processor_started or (_task_processor_task and _task_processor_task.done()):
+        _task_processor_task = asyncio.create_task(_process_redis_task_queue())
+        _redis_processor_started = True
+        print(f"[RedisQueue] Redis task processor started with task: {_task_processor_task}")
+
+
 async def queue_bulk_search_task_async(task_func: Callable, *args, **kwargs):
     """Queue a task using Redis-based queue system"""
+    # Ensure the Redis processor is running
+    await ensure_redis_processor_running()
+    
     # Determine the function name for the Redis queue
     func_name = task_func.__name__
     task_id = await _enqueue_redis_task(func_name, *args, **kwargs)
@@ -1381,6 +1430,8 @@ def execute_bulk_search_background(**kwargs):
       - store_if_no_contact (optional): whether to store pending messages instead of sending
     """
     global _background_worker_initialized
+    print(f"[BulkSearch] execute_bulk_search_background called with thread_id: {kwargs.get('thread_id', 'unknown')}")
+    
     # Initialize background worker if not already done
     if not _background_worker_initialized:
         start_background_worker()
@@ -1493,9 +1544,24 @@ def execute_bulk_search_background(**kwargs):
                 pass  # Ignore errors in cleanup
             print(f"[{time.strftime('%H:%M:%S')}] [BulkSearch] execute_bulk_search_background failed: {e}", flush=True)
 
-    # Run the async execution in a new event loop since this function is called from a thread
+    # Run the async execution - handle both thread and async contexts
     import asyncio
-    return asyncio.run(_async_execute())
+    try:
+        # Check if we're already in a running event loop
+        loop = asyncio.get_running_loop()
+        # If we get here, we're in an event loop, so we can't use asyncio.run()
+        print("[BulkSearch] execute_bulk_search_background called from within event loop - this shouldn't happen in normal operation")
+        # In this case, we should have been called differently, but just in case:
+        import concurrent.futures
+        import threading
+        def run_in_new_thread():
+            return asyncio.run(_async_execute())
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(run_in_new_thread)
+            return future.result()
+    except RuntimeError:
+        # No event loop running, safe to use asyncio.run()
+        return asyncio.run(_async_execute())
 
 # ------------------------------
 # Graceful shutdown function
