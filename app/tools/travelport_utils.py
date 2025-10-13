@@ -1010,7 +1010,11 @@ async def _process_redis_task_queue():
             result = await redis_conn.brpop(["task_queue"], timeout=1)  # Blocking pop with 1s timeout
             if result:
                 _, task_id_bytes = result
-                task_id = task_id_bytes.decode('utf-8')
+                # Handle both string and bytes cases for task_id
+                if isinstance(task_id_bytes, bytes):
+                    task_id = task_id_bytes.decode('utf-8')
+                else:
+                    task_id = task_id_bytes  # Already a string
                 
                 # Get task payload
                 task_data = await redis_conn.get(f"task:{task_id}")
