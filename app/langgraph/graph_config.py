@@ -184,52 +184,80 @@ async def invoke_graph(graph, user_message: str, thread_id: str = "default", is_
     await memory_manager.on_session_start(thread_id)
     
     # Add user message to memory manager (starts new pair)
+    print(f"[GraphConfig] About to add user message for thread {thread_id}")
     await memory_manager.add_user_message(thread_id, user_message)
     
-    # Get context for LLM (flattened pairs)
-    context_messages = await memory_manager.get_context_for_llm(thread_id)
-    print(f"[GraphConfig] Using {len(context_messages)} context messages for LLM")
-    
-    # Convert context to LangChain messages for the graph
-    langchain_messages = []
-    for msg in context_messages:
-        if msg["role"] == "user":
-            langchain_messages.append(HumanMessage(content=msg["content"]))
-        else:  # assistant
-            langchain_messages.append(AIMessage(content=msg["content"]))
-    
-    print(f"[GraphConfig] Converted to {len(langchain_messages)} LangChain messages")
-    
-    # Create configuration with voice mode and language information
-    config = {
-        "configurable": {
-            "thread_id": thread_id,
-            "is_voice_mode": is_voice,
-            "detected_language": detected_language
+    try:
+        # Get context for LLM (flattened pairs)
+        context_messages = await memory_manager.get_context_for_llm(thread_id)
+        print(f"[GraphConfig] Using {len(context_messages)} context messages for LLM")
+        
+        # Convert context to LangChain messages for the graph
+        langchain_messages = []
+        for msg in context_messages:
+            if msg["role"] == "user":
+                langchain_messages.append(HumanMessage(content=msg["content"]))
+            else:  # assistant
+                langchain_messages.append(AIMessage(content=msg["content"]))
+        
+        print(f"[GraphConfig] Converted to {len(langchain_messages)} LangChain messages")
+        
+        # Create configuration with voice mode and language information
+        config = {
+            "configurable": {
+                "thread_id": thread_id,
+                "is_voice_mode": is_voice,
+                "detected_language": detected_language
+            }
         }
-    }
-    
-    print(f"[GraphConfig] Creating config with thread_id: {thread_id}")
-    print(f"[GraphConfig] Full config: {config}")
-    
-    # Invoke the graph with the full context
-    # Set a reasonable recursion limit to prevent infinite loops while allowing multiple tool calls
-    config["recursion_limit"] = 50  # Increased to allow for multiple tool calls in sequence
-    
-    state = await graph.ainvoke(
-        {"messages": langchain_messages},
-        config,
-    )
-    
-    # Extract assistant response and add to memory manager (closes pair)
-    assistant_text = extract_last_ai_text(state)
-    if assistant_text:
-        print(f"[GraphConfig] Adding assistant response to memory: '{assistant_text[:50]}...'")
-        await memory_manager.add_assistant_message(thread_id, assistant_text)
-    else:
-        print("[GraphConfig] Warning: No assistant response extracted from state")
-    
-    return state
+        
+        print(f"[GraphConfig] Creating config with thread_id: {thread_id}")
+        print(f"[GraphConfig] Full config: {config}")
+        
+        # Invoke the graph with the full context
+        # Set a reasonable recursion limit to prevent infinite loops while allowing multiple tool calls
+        config["recursion_limit"] = 50  # Increased to allow for multiple tool calls in sequence
+        
+        state = await graph.ainvoke(
+            {"messages": langchain_messages},
+            config,
+        )
+        
+        # Extract assistant response and add to memory manager (closes pair)
+        assistant_text = extract_last_ai_text(state)
+        if assistant_text:
+            print(f"[GraphConfig] Adding assistant response to memory: '{assistant_text[:50]}...'")
+            print(f"[GraphConfig] About to add assistant message for thread {thread_id}")
+            await memory_manager.add_assistant_message(thread_id, assistant_text)
+            print(f"[GraphConfig] Successfully added assistant response to memory for thread {thread_id}")
+        else:
+            print("[GraphConfig] Warning: No assistant response extracted from state")
+            
+        return state
+    except Exception as e:
+        print(f"[GraphConfig] Error during graph invocation: {e}")
+        import traceback
+        traceback.print_exc()
+        
+        # Ensure we clean up the open pair if there was an error
+        # This prevents the "No open pair to close" error on subsequent calls
+        print(f"[GraphConfig] Attempting to recover from error by closing open pair for thread {thread_id}")
+        try:
+            # Try to add a generic error message as the assistant response to close the pair
+            error_response = "Sorry, there was an error processing your request. Please try again."
+            await memory_manager.add_assistant_message(thread_id, error_response)
+            print(f"[GraphConfig] Successfully recovered by adding error response for thread {thread_id}")
+        except ValueError as ve:
+            # If there's no open pair, this is expected and we can ignore it
+            if "No open pair to close" in str(ve):
+                print(f"[GraphConfig] Expected: No open pair to close for thread {thread_id} - likely the error occurred before add_user_message")
+            else:
+                print(f"[GraphConfig] Unexpected error closing pair for thread {thread_id}: {ve}")
+        except Exception as close_error:
+            print(f"[GraphConfig] Unexpected error when trying to close pair for thread {thread_id}: {close_error}")
+        
+        # Re-raise the original exception to maintain proper error handling
+        raise
 
 
 

@@ -503,6 +503,7 @@ class MemoryManager:
             await self._save_thread_state_to_redis(thread_state)
             
             print(f"[MemoryManager] Added user message for thread {thread_id}, turn {turn}, seq {seq}")
+            print(f"[MemoryManager] Open pair created, expecting assistant response for turn {turn}")
 
     async def add_assistant_message(self, thread_id: str, content: str) -> None:
         """Add assistant message and close the current pair (async-safe)."""
@@ -516,10 +517,40 @@ class MemoryManager:
         async with redis_conn.lock(lock_key, timeout=60, blocking_timeout=30):
             self._mark_activity(thread_state)
 
+            # Debugging: Check if there's an open pair
             if not thread_state.open_pair:
-                raise ValueError("No open pair to close with assistant message")
-
-            # Get sequence number
+                # Log more information for debugging
+                print(f"[MemoryManager] ERROR: No open pair to close with assistant message for thread {thread_id}")
+                print(f"[MemoryManager] Current context pairs count: {len(thread_state.context_pairs)}")
+                print(f"[MemoryManager] Open pair exists: {thread_state.open_pair is not None}")
+                print(f"[MemoryManager] Thread session ID: {thread_state.session_id}")
+                
+                # Check if this is a case where a previous error left the state inconsistent
+                # In this case, we can create a "recovery" where we create a user message to pair with
+                # This helps prevent the application from getting permanently stuck
+                print(f"[MemoryManager] Attempting to recover by creating a placeholder user message for thread {thread_id}")
+                
+                # Get sequence and turn numbers
+                seq = getattr(thread_state, "next_seq", 0)
+                thread_state.next_seq = seq + 1
+                
+                turn = getattr(thread_state, "next_turn", 0)
+                
+                # Create a placeholder user message to pair with this assistant response
+                placeholder_user_message = Message(
+                    role="user",
+                    content="[System: Previous user message not recorded due to an error]",
+                    ts_iso=get_now_iso(),
+                    seq=seq,
+                    turn=turn
+                )
+                
+                # Create new open pair with placeholder
+                thread_state.open_pair = Pair(turn=turn, user_message=placeholder_user_message)
+                
+                print(f"[MemoryManager] Created placeholder user message for recovery in thread {thread_id}")
+            
+            # Get sequence number for assistant message
             seq = getattr(thread_state, "next_seq", 0)
             thread_state.next_seq = seq + 1
 

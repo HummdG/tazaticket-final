@@ -160,7 +160,9 @@ async def twilio_whatsapp(
     MediaUrl0: str | None = Form(default=None),
     MediaContentType0: str | None = Form(default=None)
 ):
+    # Use WaId as primary identifier, From as fallback, and only default as last resort
     thread_id = WaId or From or "whatsapp-default"
+    print(f"[Webhook] Using thread ID: {thread_id}")
     
     try:
         # Check for unsupported media types (images, videos, GIFs, etc.)
