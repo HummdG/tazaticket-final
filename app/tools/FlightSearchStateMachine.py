@@ -426,7 +426,7 @@ Without return duration specified, I'll search for one-way tickets only."""
             print(f"[BulkFlightSearch] Queueing Redis-based background task with thread_id: {thread_id}")
             
             # Use the Redis-based queue in an async context
-            await queue_bulk_search_task_async(
+            task_id = await queue_bulk_search_task_async(
                 execute_bulk_search_background,
                 origin=origin,
                 destination=destination, 
@@ -439,6 +439,8 @@ Without return duration specified, I'll search for one-way tickets only."""
                 original_user_input=user_input_text,
                 detected_language=detected_language
             )
+            
+            print(f"[BulkFlightSearch] Queued background bulk search task {task_id} for {len(dates)} dates on route {origin} → {destination}")
             
             # Return immediate acknowledgment
             response = f"🔍 BULK SEARCH STARTED!\n\n"

@@ -1399,6 +1399,7 @@ def execute_bulk_search_background(**kwargs):
             trip_type = kwargs.get("trip_type") or "one-way"
             notify_thread_id = kwargs.get("notify_thread_id") or kwargs.get("thread_id")
             store_if_no_contact = kwargs.get("store_if_no_contact", True)
+            user_input_text = kwargs.get("user_input_text", "")
 
             # Basic validation
             if not origin or not destination or not dates:
@@ -1412,6 +1413,9 @@ def execute_bulk_search_background(**kwargs):
             await _add_active_search(search_key)
             
             print(f"[{time.strftime('%H:%M:%S')}] [BulkSearch] execute_bulk_search_background starting: {origin}->{destination}, {len(dates)} dates", flush=True)
+            print(f"[{time.strftime('%H:%M:%S')}] [BulkSearch] Parameters - Origin: {origin}, Destination: {destination}, Dates: {len(dates)}, Passengers: {number_of_passengers}, Carriers: {carriers}, Trip Type: {trip_type}", flush=True)
+            print(f"[{time.strftime('%H:%M:%S')}] [BulkSearch] Bulk search initiated for thread {notify_thread_id}", flush=True)
+            print(f"[{time.strftime('%H:%M:%S')}] [BulkSearch] User input: {user_input_text[:100]}{'...' if len(user_input_text) > 100 else ''}", flush=True)
 
             # Run the synchronous bulk search in this background thread (so it can call sync libs)
             result = bulk_search_cheapest_sync(origin, destination, dates, number_of_passengers, carriers, trip_type=trip_type)
@@ -1477,6 +1481,7 @@ def execute_bulk_search_background(**kwargs):
                     store_pending_message("unknown", message)
 
             print(f"[{time.strftime('%H:%M:%S')}] [BulkSearch] execute_bulk_search_background finished and notification sent/stored", flush=True)
+            print(f"[{time.strftime('%H:%M:%S')}] [BulkSearch] Total results: {len(result.get('all_results', []))}, Cheapest: {result.get('cheapest_price')}", flush=True)
         except Exception as e:
             # Even in async context, make sure to remove from active searches
             try:
