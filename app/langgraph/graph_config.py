@@ -80,9 +80,11 @@ class BasicToolNode:
             tool = self.tools_by_name[tool_call["name"]]
             if hasattr(tool, 'ainvoke'):
                 # This is a StructuredTool that only supports async invocation
+                print(f"[BasicToolNode] Invoking tool '{tool_call['name']}' asynchronously with args: {tool_args}")
                 tool_result = await tool.ainvoke(tool_args)
             else:
                 # Fall back to sync invocation for other tool types
+                print(f"[BasicToolNode] Invoking tool '{tool_call['name']}' synchronously with args: {tool_args}")
                 tool_result = tool.invoke(tool_args)
             
             outputs.append(
@@ -146,9 +148,16 @@ def create_graph():
     # Add nodes
     graph_builder.add_node("chatbot", chatbot_node)
     
-    # Create and add tool node
+    # # Create and add tool node
+    # tool_node = BasicToolNode(tools=tools)
+    # graph_builder.add_node("tools", tool_node)
     tool_node = BasicToolNode(tools=tools)
-    graph_builder.add_node("tools", tool_node)
+    async def tool_node_wrapper(state):
+        return await tool_node(state)
+    graph_builder.add_node("tools", tool_node_wrapper)
+    
+    
+
     
     # Add edges
     graph_builder.add_conditional_edges(
