@@ -1034,41 +1034,43 @@ async def _process_redis_task_queue():
                 try:
                     # Import the function dynamically (simplified - in real implementation you'd have a registry)
                     if task['func_name'] == 'execute_bulk_search_background':
-                        # Extract actual function from this module
                         print(f"[RedisQueue] Executing bulk search task {task_id} with params: origin={task['args'][0]}, dest={task['args'][1]}, dates={len(task['args'][2])} dates")
-                        
-                        # Since execute_bulk_search_background handles its own async context,
-                        # and we're in an async context here, we need to handle this properly
-                        # The function is designed to run in a thread context, so we'll run it in a thread
-                        import concurrent.futures
-                        def run_bulk_search():
-                            return execute_bulk_search_background(*task['args'], **task['kwargs'])
-                        
-                        loop = asyncio.get_event_loop()
-                        result = await loop.run_in_executor(None, run_bulk_search)
-                        
-                        task['status'] = 'completed'
-                        task['result'] = result
-                        print(f"[RedisQueue] Bulk search task {task_id} completed")
+
+                        try:
+                            # Import inside the block to avoid circular import issues
+                            from .travelport_utils import execute_bulk_search_background
+
+                            # Execute directly as coroutine (no thread executor)
+                            result = await execute_bulk_search_background(*task['args'], **task['kwargs'])
+
+                            task['status'] = 'completed'
+                            task['result'] = result
+                            print(f"[RedisQueue] ✅ Bulk search task {task_id} completed successfully")
+
+                        except Exception as e:
+                            task['status'] = 'failed'
+                            task['error'] = str(e)
+                            task['attempts'] = task.get('attempts', 0) + 1
+
+                            # Retry logic
+                            if task['attempts'] < task['max_attempts']:
+                                print(f"[RedisQueue] Task {task_id} failed, retrying ({task['attempts']}/{task['max_attempts']})")
+                                task['status'] = 'queued'
+                                await redis_conn.lpush("task_queue", task_id)
+                            else:
+                                print(f"[RedisQueue] ❌ Task {task_id} failed permanently after {task['max_attempts']} attempts")
+
                     else:
                         print(f"[RedisQueue] Unknown function: {task['func_name']}")
                         task['status'] = 'failed'
                         task['error'] = f"Unknown function: {task['func_name']}"
-                
+
                 except Exception as e:
-                    # Handle execution error
+                    # Handle unexpected execution error
                     task['status'] = 'failed'
                     task['error'] = str(e)
-                    task['attempts'] = task.get('attempts', 0) + 1
-                    
-                    # Retry logic
-                    if task['attempts'] < task['max_attempts']:
-                        print(f"[RedisQueue] Task {task_id} failed, retrying ({task['attempts']}/{task['max_attempts']})")
-                        task['status'] = 'queued'  # Reset to queued for retry
-                        await redis_conn.lpush("task_queue", task_id)  # Re-queue for retry
-                    else:
-                        print(f"[RedisQueue] Task {task_id} failed after {task['max_attempts']} attempts")
-                
+                    print(f"[RedisQueue] ❌ Unexpected error while processing task {task_id}: {e}")
+
                 # Update task status
                 task['completed_at'] = time.time()
                 await redis_conn.setex(f"task:{task_id}", 3600, json.dumps(task))
