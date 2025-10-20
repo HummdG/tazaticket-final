@@ -93,7 +93,6 @@ def queue_text_processing(user_message: str, thread_id: str, from_number: str, d
         traceback.print_exc()
         return "Sorry, there was an error processing your message."
 
-
 async def process_text_message_background(user_message: str, thread_id: str, from_number: str, detected_language: str):
     """Async processing pipeline for a single non-English text message."""
     import sys
@@ -114,13 +113,28 @@ async def process_text_message_background(user_message: str, thread_id: str, fro
         
         # 2) Run LangGraph (async)
         print(f"[{time.strftime('%H:%M:%S')}] [TextProcessor] LangGraph: Starting invocation for {thread_id}", flush=True)
-        from app.langgraph import create_graph, invoke_graph, extract_last_ai_text
-        graph = create_graph()  # Create graph synchronously
+        from app.langgraph.graph_config import create_graph, invoke_graph, extract_last_ai_text
+        from app.langgraph.memory_manager import memory_manager
+
+        # Create new graph per request (safe for concurrency)
+        graph = create_graph()
         print(f"[{time.strftime('%H:%M:%S')}] [TextProcessor] LangGraph: Graph created successfully for {thread_id}", flush=True)
+
+        # Ensure thread memory is loaded
+        await memory_manager.on_session_start(thread_id)
+        await memory_manager.add_user_message(thread_id, english_text)
+        print(f"[{time.strftime('%H:%M:%S')}] [TextProcessor] LangGraph: Memory initialized for {thread_id}", flush=True)
+
+        # Invoke graph with context and language
         state = await invoke_graph(graph, english_text, thread_id, detected_language=detected_language)
         print(f"[{time.strftime('%H:%M:%S')}] [TextProcessor] LangGraph: Graph invocation completed for {thread_id}", flush=True)
+
         reply_text = extract_last_ai_text(state) or "Got it."
         print(f"[{time.strftime('%H:%M:%S')}] [TextProcessor] LangGraph: Extracted AI response for {thread_id}: '{reply_text[:50]}...'", flush=True)
+
+        # Add assistant reply to memory
+        await memory_manager.add_assistant_message(thread_id, reply_text)
+        print(f"[{time.strftime('%H:%M:%S')}] [TextProcessor] LangGraph: Assistant message saved for {thread_id}", flush=True)
         
         # 3) Translate back to detected language if needed
         print(f"[{time.strftime('%H:%M:%S')}] [TextProcessor] Reverse Translation: Starting for {thread_id}", flush=True)
