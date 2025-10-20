@@ -132,9 +132,9 @@ async def process_text_message_background(user_message: str, thread_id: str, fro
         reply_text = extract_last_ai_text(state) or "Got it."
         print(f"[{time.strftime('%H:%M:%S')}] [TextProcessor] LangGraph: Extracted AI response for {thread_id}: '{reply_text[:50]}...'", flush=True)
 
-        # Add assistant reply to memory
-        await memory_manager.add_assistant_message(thread_id, reply_text)
-        print(f"[{time.strftime('%H:%M:%S')}] [TextProcessor] LangGraph: Assistant message saved for {thread_id}", flush=True)
+        # # Add assistant reply to memory
+        # await memory_manager.add_assistant_message(thread_id, reply_text)
+        # print(f"[{time.strftime('%H:%M:%S')}] [TextProcessor] LangGraph: Assistant message saved for {thread_id}", flush=True)
         
         # 3) Translate back to detected language if needed
         print(f"[{time.strftime('%H:%M:%S')}] [TextProcessor] Reverse Translation: Starting for {thread_id}", flush=True)
