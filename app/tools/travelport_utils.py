@@ -1029,25 +1029,64 @@ async def _process_redis_task_queue():
                 task['status'] = 'processing'
                 task['started_at'] = time.time()
                 await redis_conn.setex(f"task:{task_id}", 3600, json.dumps(task))
-                
                 # Execute task
                 try:
                     # Import the function dynamically (simplified - in real implementation you'd have a registry)
                     if task['func_name'] == 'execute_bulk_search_background':
-                        print(f"[RedisQueue] Executing bulk search task {task_id} with params: origin={task['args'][0]}, dest={task['args'][1]}, dates={len(task['args'][2])} dates")
+                        # Safely extract origin/dest/dates whether they were passed as positional args or kwargs
+                        origin = None
+                        destination = None
+                        dates_count = None
+                        try:
+                            # Prefer kwargs (most call sites use named args)
+                            if task.get('kwargs'):
+                                origin = task['kwargs'].get('origin') or task['kwargs'].get('from') or task['kwargs'].get('orig')
+                                destination = task['kwargs'].get('destination') or task['kwargs'].get('to') or task['kwargs'].get('dest')
+                                dates = task['kwargs'].get('dates') or task['kwargs'].get('date_list') or []
+                                dates_count = len(dates) if dates is not None else 0
+                            # Fallback to positional args if provided
+                            if (not origin) and task.get('args'):
+                                try:
+                                    origin = task['args'][0]
+                                except Exception:
+                                    origin = None
+                                try:
+                                    destination = task['args'][1]
+                                except Exception:
+                                    destination = None
+                                try:
+                                    dates = task['args'][2]
+                                    dates_count = len(dates) if dates is not None else 0
+                                except Exception:
+                                    # leave dates_count None if not available
+                                    pass
+                        except Exception as _e:
+                            # Defensive fallback
+                            print(f"[RedisQueue] Warning: failed to parse task params safely: {_e}")
+
+                        print(f"[RedisQueue] Executing bulk search task {task_id} with params: origin={origin}, dest={destination}, dates={dates_count if dates_count is not None else 'unknown'}")
 
                         try:
                             # Import inside the block to avoid circular import issues
                             from .travelport_utils import execute_bulk_search_background
 
-                            # Execute directly as coroutine (no thread executor)
-                            result = await execute_bulk_search_background(*task['args'], **task['kwargs'])
+                            # Prefer calling with kwargs when available (most callers use kwargs)
+                            if task.get('kwargs'):
+                                result = await execute_bulk_search_background(**task['kwargs'])
+                            else:
+                                # Fallback: positional args might be present
+                                result = await execute_bulk_search_background(*task.get('args', []), **task.get('kwargs', {}))
 
                             task['status'] = 'completed'
                             task['result'] = result
                             print(f"[RedisQueue] ✅ Bulk search task {task_id} completed successfully")
 
                         except Exception as e:
+                            # Log full traceback for easier debugging
+                            import traceback
+                            tb = traceback.format_exc()
+                            print(f"[RedisQueue] Bulk search execution failed for {task_id}: {e}\n{tb}")
+
                             task['status'] = 'failed'
                             task['error'] = str(e)
                             task['attempts'] = task.get('attempts', 0) + 1
@@ -1067,9 +1106,12 @@ async def _process_redis_task_queue():
 
                 except Exception as e:
                     # Handle unexpected execution error
+                    import traceback
+                    tb = traceback.format_exc()
                     task['status'] = 'failed'
                     task['error'] = str(e)
-                    print(f"[RedisQueue] ❌ Unexpected error while processing task {task_id}: {e}")
+                    print(f"[RedisQueue] ❌ Unexpected error while processing task {task_id}: {e}\n{tb}")
+
 
                 # Update task status
                 task['completed_at'] = time.time()
