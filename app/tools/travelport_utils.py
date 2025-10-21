@@ -1410,50 +1410,90 @@ async def send_whatsapp_message(phone_number: str, message: str):
     except Exception as e:
         print(f"[BulkSearch] Failed to send WhatsApp message: {e}")
 
-def send_async_response(thread_id: str, message: str, user_phone: str = None):
+# async def send_async_response(thread_id: str, message: str, user_phone: str = None):
+#     """
+#     Synchronous helper used by existing code; schedules async send when possible.
+#     """
+#     try:
+#         whatsapp_number = None
+        
+#         # thread_id can be:
+#         # 1. Pure digits (phone number without country code): e.g. "447948623631"
+#         # 2. WhatsApp ID format: e.g. "whatsapp:+447948623631"  
+#         # 3. Phone number with + prefix: e.g. "+447948623631"
+        
+#         if thread_id.startswith("whatsapp:"):
+#             # Already in WhatsApp format
+#             whatsapp_number = thread_id
+#             print(f"[BulkSearch] Thread ID is already WhatsApp format: {whatsapp_number}")
+#         elif thread_id.startswith("+"):
+#             # Phone number with + prefix
+#             whatsapp_number = f"whatsapp:{thread_id}"
+#             print(f"[BulkSearch] Converted phone number to WhatsApp format: {whatsapp_number}")
+#         elif thread_id.isdigit():
+#             # Pure digits - assume it's a phone number and add + prefix
+#             whatsapp_number = f"whatsapp:+{thread_id}"
+#         else:
+#             # Allow user_phone fallback
+#             if user_phone:
+#                 whatsapp_number = user_phone if user_phone.startswith("whatsapp:") else f"whatsapp:{user_phone}"
+#             else:
+#                 print(f"[BulkSearch] Invalid thread_id for WhatsApp: {thread_id}")
+#                 return
+
+#         # schedule or run
+#         try:
+#             loop = asyncio.get_running_loop()
+#             if loop and loop.is_running():
+#                 asyncio.create_task(send_whatsapp_message(whatsapp_number, message))
+#                 return
+#         except RuntimeError:
+#             pass
+
+#         # no loop, run in new loop (blocks)
+#         asyncio.run(send_whatsapp_message(whatsapp_number, message))
+#     except Exception as e:
+#         print(f"[BulkSearch] Failed to send async response: {e}")
+
+
+async def send_async_response(thread_id: str, message: str, user_phone: str = None):
     """
-    Synchronous helper used by existing code; schedules async send when possible.
+    Async-safe helper for sending WhatsApp responses via Twilio.
+    Properly awaits send_whatsapp_message without creating nested event loops.
     """
     try:
         whatsapp_number = None
-        
+
         # thread_id can be:
-        # 1. Pure digits (phone number without country code): e.g. "447948623631"
-        # 2. WhatsApp ID format: e.g. "whatsapp:+447948623631"  
-        # 3. Phone number with + prefix: e.g. "+447948623631"
-        
+        # 1. "whatsapp:+447948623631"
+        # 2. "+447948623631"
+        # 3. "447948623631"
         if thread_id.startswith("whatsapp:"):
-            # Already in WhatsApp format
             whatsapp_number = thread_id
             print(f"[BulkSearch] Thread ID is already WhatsApp format: {whatsapp_number}")
         elif thread_id.startswith("+"):
-            # Phone number with + prefix
             whatsapp_number = f"whatsapp:{thread_id}"
             print(f"[BulkSearch] Converted phone number to WhatsApp format: {whatsapp_number}")
         elif thread_id.isdigit():
-            # Pure digits - assume it's a phone number and add + prefix
             whatsapp_number = f"whatsapp:+{thread_id}"
         else:
-            # Allow user_phone fallback
             if user_phone:
                 whatsapp_number = user_phone if user_phone.startswith("whatsapp:") else f"whatsapp:{user_phone}"
+                print(f"[BulkSearch] Fallback user_phone used for WhatsApp: {whatsapp_number}")
             else:
                 print(f"[BulkSearch] Invalid thread_id for WhatsApp: {thread_id}")
                 return
 
-        # schedule or run
+        # ✅ Async-safe send (no new event loop creation)
         try:
-            loop = asyncio.get_running_loop()
-            if loop and loop.is_running():
-                asyncio.create_task(send_whatsapp_message(whatsapp_number, message))
-                return
-        except RuntimeError:
-            pass
+            await send_whatsapp_message(whatsapp_number, message)
+            print(f"[BulkSearch] WhatsApp message successfully sent to {whatsapp_number}")
+        except Exception as send_err:
+            print(f"[BulkSearch] Error while sending WhatsApp message: {send_err}")
 
-        # no loop, run in new loop (blocks)
-        asyncio.run(send_whatsapp_message(whatsapp_number, message))
     except Exception as e:
         print(f"[BulkSearch] Failed to send async response: {e}")
+
 
 def store_pending_message(thread_id: str, message: str):
     global _pending_messages
@@ -1471,7 +1511,7 @@ def store_pending_message(thread_id: str, message: str):
 _background_worker_initialized = False
 
 # --------------------------------------------------------------------
-# ✅ Fixed Async Version — safe to run inside event loop, with full logs
+# ✅ Final Fully Async Version — uses async Travelport calls safely
 # --------------------------------------------------------------------
 async def execute_bulk_search_background(**kwargs):
     """
@@ -1481,11 +1521,9 @@ async def execute_bulk_search_background(**kwargs):
       - notify_thread_id (optional): where to send results (whatsapp thread id)
       - store_if_no_contact (optional): whether to store pending messages instead of sending
     """
-
-
     print(f"[BulkSearch] execute_bulk_search_background called with thread_id: {kwargs.get('thread_id', 'unknown')}", flush=True)
 
-    # Extract parameters safely
+    # Extract parameters
     origin = kwargs.get("origin") or kwargs.get("from") or kwargs.get("orig")
     destination = kwargs.get("destination") or kwargs.get("to") or kwargs.get("dest")
     dates = kwargs.get("dates") or kwargs.get("date_list") or []
@@ -1502,8 +1540,8 @@ async def execute_bulk_search_background(**kwargs):
         return {"ok": False, "error": "missing required params"}
 
     search_key = f"{notify_thread_id}:{origin}:{destination}"
-
     from .travelport_utils import _add_active_search, _remove_active_search
+
     try:
         await _add_active_search(search_key)
     except Exception as e:
@@ -1514,21 +1552,20 @@ async def execute_bulk_search_background(**kwargs):
     print(f"[{time.strftime('%H:%M:%S')}] [BulkSearch] Bulk search initiated for thread {notify_thread_id}", flush=True)
     print(f"[{time.strftime('%H:%M:%S')}] [BulkSearch] User input: {user_input_text[:100]}{'...' if len(user_input_text) > 100 else ''}", flush=True)
 
-    # Run sync travelport search safely in background thread
+    # 🔁 Use the async bulk search directly — no sync wrapper
     try:
-        result = await asyncio.to_thread(
-            bulk_search_cheapest_sync,
-            origin,
-            destination,
-            dates,
-            number_of_passengers,
-            carriers,
-            trip_type
+        result = await bulk_search_cheapest_async(
+            origin=origin,
+            destination=destination,
+            dates=dates,
+            number_of_passengers=number_of_passengers,
+            carriers=carriers,
+            trip_type=trip_type
         )
     except Exception as e:
         import traceback
         tb = traceback.format_exc()
-        print(f"[BulkSearch] ❌ Exception in bulk_search_cheapest_sync: {e}\n{tb}", flush=True)
+        print(f"[BulkSearch] ❌ Exception in bulk_search_cheapest_async: {e}\n{tb}", flush=True)
         await _remove_active_search(search_key)
         return {"ok": False, "error": str(e)}
 
@@ -1541,10 +1578,13 @@ async def execute_bulk_search_background(**kwargs):
     # Prepare message
     if not result or not result.get("ok"):
         short = f"No valid fares found for {origin}→{destination} for provided dates."
-        if notify_thread_id:
-            send_async_response(notify_thread_id, short)
-        elif store_if_no_contact:
-            store_pending_message(str(notify_thread_id or "unknown"), short)
+        try:
+            if notify_thread_id:
+                await send_async_response(notify_thread_id, short)
+            elif store_if_no_contact:
+                store_pending_message(str(notify_thread_id or "unknown"), short)
+        except Exception as e:
+            print(f"[BulkSearch] ⚠️ Failed to send no-result message: {e}")
         print(f"[{time.strftime('%H:%M:%S')}] [BulkSearch] execute_bulk_search_background completed with no results", flush=True)
         return {"ok": False, "error": "no valid fares"}
 
@@ -1553,11 +1593,13 @@ async def execute_bulk_search_background(**kwargs):
     total_searches = result.get("total_searches")
     successful = result.get("successful_searches")
 
-    msg_lines = []
-    msg_lines.append(f"Cheapest fares for {origin} → {destination}")
-    msg_lines.append(f"Searched {total_searches} dates, found {successful} options")
+    msg_lines = [
+        f"Cheapest fares for {origin} → {destination}",
+        f"Searched {total_searches} dates, found {successful} options",
+    ]
     if price:
         msg_lines.append(f"Lowest price: {price}")
+
     if cheapest:
         summary = cheapest.get("summary") or {}
         if summary.get("price"):
@@ -1580,12 +1622,12 @@ async def execute_bulk_search_background(**kwargs):
                 msg_lines.append(f"  Return: {dt} | {inbound.get('itinerary', {}).get('airlines')} | {inbound.get('itinerary', {}).get('duration_human')}")
         else:
             msg_lines.append("- Details unavailable for cheapest result")
+
     message = "\n".join(msg_lines)
 
-    # Send or store response
     try:
         if notify_thread_id:
-            send_async_response(notify_thread_id, message)
+            await send_async_response(notify_thread_id, message)
         elif store_if_no_contact:
             store_pending_message("unknown", message)
         print(f"[{time.strftime('%H:%M:%S')}] [BulkSearch] execute_bulk_search_background finished and notification sent/stored", flush=True)
@@ -1595,6 +1637,134 @@ async def execute_bulk_search_background(**kwargs):
 
     return {"ok": True, "result": result}
 # --------------------------------------------------------------------
+
+
+
+# # --------------------------------------------------------------------
+# # ✅ Fixed Async Version — safe to run inside event loop, with full logs
+# # --------------------------------------------------------------------
+# async def execute_bulk_search_background(**kwargs):
+#     """
+#     Orchestration function for background bulk search (async-safe).
+#     Accepts kwargs to match various call sites. Expected keys include:
+#       - origin, destination, dates (list), number_of_passengers, carriers, trip_type
+#       - notify_thread_id (optional): where to send results (whatsapp thread id)
+#       - store_if_no_contact (optional): whether to store pending messages instead of sending
+#     """
+
+
+#     print(f"[BulkSearch] execute_bulk_search_background called with thread_id: {kwargs.get('thread_id', 'unknown')}", flush=True)
+
+#     # Extract parameters safely
+#     origin = kwargs.get("origin") or kwargs.get("from") or kwargs.get("orig")
+#     destination = kwargs.get("destination") or kwargs.get("to") or kwargs.get("dest")
+#     dates = kwargs.get("dates") or kwargs.get("date_list") or []
+#     number_of_passengers = kwargs.get("number_of_passengers") or kwargs.get("pax") or 1
+#     carriers = kwargs.get("carriers") or kwargs.get("carrier_list") or []
+#     trip_type = kwargs.get("trip_type") or "one-way"
+#     notify_thread_id = kwargs.get("notify_thread_id") or kwargs.get("thread_id")
+#     store_if_no_contact = kwargs.get("store_if_no_contact", True)
+#     user_input_text = kwargs.get("user_input_text", "")
+
+#     # Basic validation
+#     if not origin or not destination or not dates:
+#         print(f"[{time.strftime('%H:%M:%S')}] [BulkSearch] execute_bulk_search_background missing required params", flush=True)
+#         return {"ok": False, "error": "missing required params"}
+
+#     search_key = f"{notify_thread_id}:{origin}:{destination}"
+
+#     from .travelport_utils import _add_active_search, _remove_active_search
+#     try:
+#         await _add_active_search(search_key)
+#     except Exception as e:
+#         print(f"[BulkSearch] Warning: failed to register active search: {e}", flush=True)
+
+#     print(f"[{time.strftime('%H:%M:%S')}] [BulkSearch] execute_bulk_search_background starting: {origin}->{destination}, {len(dates)} dates", flush=True)
+#     print(f"[{time.strftime('%H:%M:%S')}] [BulkSearch] Parameters - Origin: {origin}, Destination: {destination}, Dates: {len(dates)}, Passengers: {number_of_passengers}, Carriers: {carriers}, Trip Type: {trip_type}", flush=True)
+#     print(f"[{time.strftime('%H:%M:%S')}] [BulkSearch] Bulk search initiated for thread {notify_thread_id}", flush=True)
+#     print(f"[{time.strftime('%H:%M:%S')}] [BulkSearch] User input: {user_input_text[:100]}{'...' if len(user_input_text) > 100 else ''}", flush=True)
+
+#     # Run sync travelport search safely in background thread
+#     try:
+#         result = await asyncio.to_thread(
+#             bulk_search_cheapest_sync,
+#             origin,
+#             destination,
+#             dates,
+#             number_of_passengers,
+#             carriers,
+#             trip_type
+#         )
+#     except Exception as e:
+#         import traceback
+#         tb = traceback.format_exc()
+#         print(f"[BulkSearch] ❌ Exception in bulk_search_cheapest_sync: {e}\n{tb}", flush=True)
+#         await _remove_active_search(search_key)
+#         return {"ok": False, "error": str(e)}
+
+#     # Cleanup active search
+#     try:
+#         await _remove_active_search(search_key)
+#     except Exception as e:
+#         print(f"[BulkSearch] Warning: failed to remove active search: {e}", flush=True)
+
+#     # Prepare message
+#     if not result or not result.get("ok"):
+#         short = f"No valid fares found for {origin}→{destination} for provided dates."
+#         if notify_thread_id:
+#             await send_async_response(notify_thread_id, short)
+#         elif store_if_no_contact:
+#             store_pending_message(str(notify_thread_id or "unknown"), short)
+#         print(f"[{time.strftime('%H:%M:%S')}] [BulkSearch] execute_bulk_search_background completed with no results", flush=True)
+#         return {"ok": False, "error": "no valid fares"}
+
+#     cheapest = result.get("cheapest_result")
+#     price = result.get("cheapest_price")
+#     total_searches = result.get("total_searches")
+#     successful = result.get("successful_searches")
+
+#     msg_lines = []
+#     msg_lines.append(f"Cheapest fares for {origin} → {destination}")
+#     msg_lines.append(f"Searched {total_searches} dates, found {successful} options")
+#     if price:
+#         msg_lines.append(f"Lowest price: {price}")
+#     if cheapest:
+#         summary = cheapest.get("summary") or {}
+#         if summary.get("price"):
+#             leg_price = summary["price"].get("total")
+#             dt = summary.get("itinerary", {}).get("departure_time_text") or summary.get("search_date")
+#             airlines = (summary.get("itinerary", {}).get("airlines")) or "N/A"
+#             dur = (summary.get("itinerary", {}).get("duration_human")) or "N/A"
+#             stops = summary.get("itinerary", {}).get("stops")
+#             msg_lines.append(f"- {dt} | {airlines} | {dur} | stops: {stops} | fare: {leg_price}")
+#         elif summary.get("price_total"):
+#             pt = summary["price_total"].get("total")
+#             outb = summary.get("outbound") or {}
+#             inbound = summary.get("inbound") or {}
+#             msg_lines.append(f"- Round-trip total: {pt}")
+#             if outb:
+#                 dt = outb.get("itinerary", {}).get("departure_time_text") or outb.get("search_date")
+#                 msg_lines.append(f"  Outbound: {dt} | {outb.get('itinerary', {}).get('airlines')} | {outb.get('itinerary', {}).get('duration_human')}")
+#             if inbound:
+#                 dt = inbound.get("itinerary", {}).get("departure_time_text") or inbound.get("search_date")
+#                 msg_lines.append(f"  Return: {dt} | {inbound.get('itinerary', {}).get('airlines')} | {inbound.get('itinerary', {}).get('duration_human')}")
+#         else:
+#             msg_lines.append("- Details unavailable for cheapest result")
+#     message = "\n".join(msg_lines)
+
+#     # Send or store response
+#     try:
+#         if notify_thread_id:
+#             await send_async_response(notify_thread_id, message)
+#         elif store_if_no_contact:
+#             store_pending_message("unknown", message)
+#         print(f"[{time.strftime('%H:%M:%S')}] [BulkSearch] execute_bulk_search_background finished and notification sent/stored", flush=True)
+#         print(f"[{time.strftime('%H:%M:%S')}] [BulkSearch] Total results: {len(result.get('all_results', []))}, Cheapest: {result.get('cheapest_price')}", flush=True)
+#     except Exception as e:
+#         print(f"[BulkSearch] ⚠️ Failed to send/store message: {e}", flush=True)
+
+#     return {"ok": True, "result": result}
+# # --------------------------------------------------------------------
 
 # def execute_bulk_search_background(**kwargs):
 #     """
@@ -1654,7 +1824,7 @@ async def execute_bulk_search_background(**kwargs):
 #             if not result.get("ok"):
 #                 short = f"No valid fares found for {origin}→{destination} for provided dates."
 #                 if notify_thread_id:
-#                     send_async_response(notify_thread_id, short)
+#                     await send_async_response(notify_thread_id, short)
 #                 elif store_if_no_contact:
 #                     # store pending in case no immediate contact
 #                     store_pending_message(str(notify_thread_id or "unknown"), short)
@@ -1701,7 +1871,7 @@ async def execute_bulk_search_background(**kwargs):
 
 #             # Send or store
 #             if notify_thread_id:
-#                 send_async_response(notify_thread_id, message)
+#                 await send_async_response(notify_thread_id, message)
 #             else:
 #                 if store_if_no_contact:
 #                     store_pending_message("unknown", message)
