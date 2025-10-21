@@ -240,7 +240,136 @@ async def FlightSearchStateMachine(
     await _save_state_machine_to_redis(thread_id, sm)
     
     # Check if complete and perform search
+    print(f"[FSM] All parameters collected for {thread_id}. Triggering search automatically.")
+
+    # if sm.get_state() == "complete":
+    #     print(f"[FSM] Current complete state for {thread_id}: {sm.get_state()}")
+    #     try:
+    #         if sm.type_of_trip == "one-way":
+    #             payload = OneWayFlightSearch(
+    #                 origin=sm.origin,
+    #                 destination=sm.destination,
+    #                 departure_date=sm.departure_date,
+    #                 number_of_passengers=sm.number_of_passengers,
+    #                 carriers=preferred_carriers
+    #             )
+    #             # Call async TravelportSearch directly 
+    #             result = await TravelportSearch.invoke({"payload": payload, "trip_type": "one-way"})
+    #         else:
+    #             payload = RoundTripFlightSearch(
+    #                 origin=sm.origin,
+    #                 destination=sm.destination,
+    #                 departure_date=sm.departure_date,
+    #                 return_date=sm.return_date,
+    #                 number_of_passengers=sm.number_of_passengers,
+    #                 carriers=preferred_carriers
+    #             )
+    #             # Call TravelportSearch directly (assuming it's properly async)
+    #             result = await TravelportSearch.invoke({"payload": payload, "trip_type": "round-trip"})
+
+    #         if result.get("ok"):
+    #             summary = result.get("summary")
+    #             if summary:
+    #                 # Format detailed flight information
+    #                 if summary.get("price_total"):  # Round-trip
+    #                     price = summary["price_total"]
+    #                     outbound = summary.get("outbound", {})
+    #                     inbound = summary.get("inbound", {})
+                        
+    #                     # Initialize response for round-trip
+    #                     response = f"✈️ Round-trip flight found: {summary['price_total']} {summary['currency']}\n"
+                        
+    #                     if outbound:
+    #                         duration = format_duration(outbound.get("duration_minutes_total"))
+    #                         stops = format_stops(outbound.get("stops_total", 0))
+    #                         response += f"🛫 Outbound: {duration}, {stops}\n"
+    #                         if outbound.get("baggage"):
+    #                             response += f"   Baggage: {format_baggage_summary(outbound['baggage'])}\n"
+    #                         lf = format_layovers(outbound.get("itinerary"))
+    #                         if lf:
+    #                             response += lf
+                        
+    #                     if inbound:
+    #                         duration = format_duration(inbound.get("duration_minutes_total"))
+    #                         stops = format_stops(inbound.get("stops_total", 0))
+    #                         response += f"🛬 Return: {duration}, {stops}\n"
+    #                         if inbound.get("baggage"):
+    #                             response += f"   Baggage: {format_baggage_summary(inbound['baggage'])}\n"
+    #                         lf = format_layovers(inbound.get("itinerary"))
+    #                         if lf:
+    #                             response += lf
+                        
+    #                     # Reset state machine after successful search
+    #                     await _save_state_machine_to_redis(thread_id, ConversationFlowSM())
+    #                     return response
+    #                 else:  # One-way
+    #                     price = summary.get("price", {})
+    #                     price_text = f"{price.get('total')} {price.get('currency')}" if price.get('total') else "Price not available"
+                        
+    #                     duration = format_duration(summary.get("duration_minutes_total"))
+    #                     stops = format_stops(summary.get("stops_total", 0))
+                        
+    #                     response = f"✈️ One-way flight found: {price_text}\n"
+    #                     response += f"🛫 Flight: {duration}, {stops}\n"
+    #                     it = (summary.get("itinerary") or {})
+                        
+    #                     if it.get("airlines"):
+    #                         response += f"Airline: {it['airlines']}\n"
+    #                     if it.get("flight_numbers"):
+    #                         response += f"Flight no.: {it['flight_numbers']}\n"
+    #                     lf = format_layovers(it)
+    #                     if lf:
+    #                         response += lf
+                        
+    #                     if summary.get("baggage"):
+    #                         response += f"Baggage: {format_baggage_summary(summary['baggage'])}\n"
+                        
+    #                     # Reset state machine after successful search
+    #                     await _save_state_machine_to_redis(thread_id, ConversationFlowSM())
+    #                     return response
+                
+    #             # Fallback if no summary
+    #             # Reset state machine after successful search
+    #             await _save_state_machine_to_redis(thread_id, ConversationFlowSM())
+    #             return f"Flight search completed! Found flights for {sm.origin} to {sm.destination} on {sm.departure_date}."
+    #         else:
+    #             return f"Sorry, I couldn't find flights. Error: {result.get('error', 'Unknown error')}"
+                
+    #     except Exception as e:
+    #         return f"Sorry, there was an error searching for flights: {str(e)}"
+    
     if sm.get_state() == "complete":
+        print(f"[FSM] All parameters collected for {thread_id}. Checking for bulk search intent...")
+    
+        # Detect if this is a bulk search query (e.g., “mid December”, “next week”, “in November”)
+        if is_bulk_search_query(user_input_text or ""):
+            print(f"[FSM] Bulk search pattern detected in input for {thread_id}, delegating to BulkFlightSearch.")
+            from .FlightSearchStateMachine import BulkFlightSearch
+    
+            # Build minimal args for BulkFlightSearch
+            bulk_args = dict(
+                origin=sm.origin,
+                destination=sm.destination,
+                user_input_text=user_input_text,
+                number_of_passengers=sm.number_of_passengers,
+                thread_id=thread_id,
+                mode_of_conversation=sm.mode_of_conversation,
+                detected_language=sm.detected_language,
+            )
+    
+            try:
+                result = await BulkFlightSearch(**bulk_args)
+                await _save_state_machine_to_redis(thread_id, ConversationFlowSM())  # reset FSM
+                return (
+                    "✅ All flight search parameters have been set successfully. "
+                    "Starting bulk search for best prices...\n\n" + str(result)
+                )
+            except Exception as e:
+                print(f"[FSM] Error while calling BulkFlightSearch for {thread_id}: {e}")
+                return f"⚠️ I gathered all flight details, but couldn't start bulk search: {e}"
+    
+        # Otherwise perform direct normal flight search
+        print(f"[FSM] Performing regular flight search for {sm.origin} → {sm.destination}")
         try:
             if sm.type_of_trip == "one-way":
                 payload = OneWayFlightSearch(
@@ -248,9 +377,8 @@ async def FlightSearchStateMachine(
                     destination=sm.destination,
                     departure_date=sm.departure_date,
                     number_of_passengers=sm.number_of_passengers,
-                    carriers=preferred_carriers
+                    carriers=parse_carrier_preference(user_input_text or "")
                 )
-                # Call TravelportSearch directly (assuming it's properly async)
                 result = await TravelportSearch.invoke({"payload": payload, "trip_type": "one-way"})
             else:
                 payload = RoundTripFlightSearch(
@@ -259,86 +387,60 @@ async def FlightSearchStateMachine(
                     departure_date=sm.departure_date,
                     return_date=sm.return_date,
                     number_of_passengers=sm.number_of_passengers,
-                    carriers=preferred_carriers
+                    carriers=parse_carrier_preference(user_input_text or "")
                 )
-                # Call TravelportSearch directly (assuming it's properly async)
                 result = await TravelportSearch.invoke({"payload": payload, "trip_type": "round-trip"})
-
+    
+            # Handle result
             if result.get("ok"):
                 summary = result.get("summary")
+                await _save_state_machine_to_redis(thread_id, ConversationFlowSM())  # reset FSM
+    
                 if summary:
-                    # Format detailed flight information
-                    if summary.get("price_total"):  # Round-trip
-                        price = summary["price_total"]
-                        outbound = summary.get("outbound", {})
-                        inbound = summary.get("inbound", {})
-                        
-                        # Initialize response for round-trip
-                        response = f"✈️ Round-trip flight found: {summary['price_total']} {summary['currency']}\n"
-                        
-                        if outbound:
-                            duration = format_duration(outbound.get("duration_minutes_total"))
-                            stops = format_stops(outbound.get("stops_total", 0))
-                            response += f"🛫 Outbound: {duration}, {stops}\n"
-                            if outbound.get("baggage"):
-                                response += f"   Baggage: {format_baggage_summary(outbound['baggage'])}\n"
-                            lf = format_layovers(outbound.get("itinerary"))
-                            if lf:
-                                response += lf
-                        
-                        if inbound:
-                            duration = format_duration(inbound.get("duration_minutes_total"))
-                            stops = format_stops(inbound.get("stops_total", 0))
-                            response += f"🛬 Return: {duration}, {stops}\n"
-                            if inbound.get("baggage"):
-                                response += f"   Baggage: {format_baggage_summary(inbound['baggage'])}\n"
-                            lf = format_layovers(inbound.get("itinerary"))
-                            if lf:
-                                response += lf
-                        
-                        # Reset state machine after successful search
-                        await _save_state_machine_to_redis(thread_id, ConversationFlowSM())
-                        return response
-                    else:  # One-way
-                        price = summary.get("price", {})
-                        price_text = f"{price.get('total')} {price.get('currency')}" if price.get('total') else "Price not available"
-                        
-                        duration = format_duration(summary.get("duration_minutes_total"))
-                        stops = format_stops(summary.get("stops_total", 0))
-                        
-                        response = f"✈️ One-way flight found: {price_text}\n"
-                        response += f"🛫 Flight: {duration}, {stops}\n"
-                        it = (summary.get("itinerary") or {})
-                        
-                        if it.get("airlines"):
-                            response += f"Airline: {it['airlines']}\n"
-                        if it.get("flight_numbers"):
-                            response += f"Flight no.: {it['flight_numbers']}\n"
-                        lf = format_layovers(it)
-                        if lf:
-                            response += lf
-                        
-                        if summary.get("baggage"):
-                            response += f"Baggage: {format_baggage_summary(summary['baggage'])}\n"
-                        
-                        # Reset state machine after successful search
-                        await _save_state_machine_to_redis(thread_id, ConversationFlowSM())
-                        return response
-                
-                # Fallback if no summary
-                # Reset state machine after successful search
-                await _save_state_machine_to_redis(thread_id, ConversationFlowSM())
-                return f"Flight search completed! Found flights for {sm.origin} to {sm.destination} on {sm.departure_date}."
+                    price = summary.get("price_total") or summary.get("price", {}).get("total")
+                    price_text = f"{price} {summary.get('currency', '')}" if price else "Price not available"
+                    return (
+                        f"✅ All flight details collected and search completed!\n"
+                        f"✈️ {sm.origin} → {sm.destination}\n"
+                        f"💰 Lowest price: {price_text}"
+                    )
+                return f"✅ All flight details collected. Search complete for {sm.origin} → {sm.destination}."
             else:
-                return f"Sorry, I couldn't find flights. Error: {result.get('error', 'Unknown error')}"
-                
+                return f"Sorry, I couldn't find flights: {result.get('error', 'Unknown error')}"
+    
         except Exception as e:
-            return f"Sorry, there was an error searching for flights: {str(e)}"
+            print(f"[FSM] Error during direct search for {thread_id}: {e}")
+            return f"⚠️ I gathered all flight details, but there was an error during search: {e}"
+    
+    # else:
+    #     missing = sm.get_missing_variables()
+    #     return f"Flight search in progress. Still need: {', '.join(missing)}. Please provide these details to continue."
+
+
     else:
         missing = sm.get_missing_variables()
-        return f"Flight search in progress. Still need: {', '.join(missing)}. Please provide these details to continue."
 
+        # If some fields are missing, continue prompting user
+        if missing:
+            return (
+                f"🧭 Flight search setup in progress.\n"
+                f"Missing details: {', '.join(missing)}.\n"
+                f"Please provide these to continue."
+            )
 
+        # If no fields are missing but state not yet marked complete — finalize it
+        required = ["origin", "destination", "departure_date", "number_of_passengers", "type_of_trip"]
+        if all(getattr(sm, field, None) for field in required):
+            # Mark as complete and save state
+            sm.set_state("complete")
+            await _save_state_machine_to_redis(thread_id, sm)
+            return (
+                "✅ All flight search parameters have been set successfully. "
+                "Proceeding to search flights..."
+            )
+
+        # Fallback safeguard (shouldn’t normally trigger)
+        return "⚠️ State machine could not determine missing parameters. Please restate your query."
 
 
 
