@@ -1313,60 +1313,126 @@ def queue_bulk_search_task(task_func: Callable, *args, **kwargs):
 # ------------------------------
 _twilio_client = None
 _twilio_http_session = None
+_twilio_lock = asyncio.Lock()
 
-def _get_twilio_client():
+async def _get_twilio_client():
     """
-    Return a reusable Twilio client configured with AsyncTwilioHttpClient when available.
-    Done: Uses aiohttp TCPConnector with env-configured limits for connection pooling.
+    Async-safe Twilio client initializer.
+    Lazily creates AsyncTwilioHttpClient inside an active event loop with connection pooling.
     """
-    global _twilio_client, _twilio_http_session
-    if _twilio_client is not None:
+    global _twilio_client, _twilio_http_session, _twilio_lock
+
+    async with _twilio_lock:
+        if _twilio_client is not None:
+            return _twilio_client
+
+        try:
+            from dotenv import load_dotenv
+            load_dotenv()
+        except Exception:
+            pass
+
+        account_sid = os.getenv('TWILIO_ACCOUNT_SID')
+        auth_token = os.getenv('TWILIO_AUTH_TOKEN')
+        if not account_sid or not auth_token:
+            print("[BulkSearch] TWILIO_ACCOUNT_SID or TWILIO_AUTH_TOKEN not set; Twilio disabled")
+            return None
+
+        try:
+            pool_limit = int(os.getenv('TWILIO_POOL_LIMIT', '50'))
+            pool_per_host = int(os.getenv('TWILIO_POOL_PER_HOST', '25'))
+        except Exception:
+            pool_limit, pool_per_host = 50, 25
+
+        try:
+            from twilio.http.async_http_client import AsyncTwilioHttpClient  # type: ignore
+            from twilio.rest import Client as TwilioRestClient  # type: ignore
+
+            if aiohttp and TCPConnector:
+                connector = TCPConnector(limit=pool_limit, limit_per_host=pool_per_host, force_close=False)
+                _twilio_http_session = aiohttp.ClientSession(connector=connector)
+                _twilio_client = TwilioRestClient(
+                    account_sid,
+                    auth_token,
+                    http_client=AsyncTwilioHttpClient(session=_twilio_http_session)
+                )
+                print("[BulkSearch] Initialized Twilio async client with pooled aiohttp session")
+            else:
+                _twilio_client = TwilioRestClient(
+                    account_sid,
+                    auth_token,
+                    http_client=AsyncTwilioHttpClient()
+                )
+                print("[BulkSearch] Initialized Twilio async client (no aiohttp pooling)")
+
+        except Exception as e:
+            print(f"[BulkSearch] ⚠️ Failed to initialize async Twilio client, using sync fallback: {e}")
+            try:
+                from twilio.rest import Client as TwilioRestClient  # type: ignore
+                _twilio_client = TwilioRestClient(account_sid, auth_token)
+            except Exception as inner:
+                print(f"[BulkSearch] ❌ Twilio fallback client failed: {inner}")
+                _twilio_client = None
+
         return _twilio_client
 
-    try:
-        from dotenv import load_dotenv
-        load_dotenv()
-    except Exception:
-        pass
 
-    account_sid = os.getenv('TWILIO_ACCOUNT_SID')
-    auth_token = os.getenv('TWILIO_AUTH_TOKEN')
-    if not account_sid or not auth_token:
-        print("[BulkSearch] TWILIO_ACCOUNT_SID or TWILIO_AUTH_TOKEN not set; Twilio disabled")
-        return None
 
-    # Read pooling config from env, with sane defaults
-    try:
-        pool_limit = int(os.getenv('TWILIO_POOL_LIMIT', '50'))
-    except Exception:
-        pool_limit = 50
-    try:
-        pool_per_host = int(os.getenv('TWILIO_POOL_PER_HOST', '25'))
-    except Exception:
-        pool_per_host = 25
+# def _get_twilio_client():
+#     """
+#     Return a reusable Twilio client configured with AsyncTwilioHttpClient when available.
+#     Done: Uses aiohttp TCPConnector with env-configured limits for connection pooling.
+#     """
+#     global _twilio_client, _twilio_http_session
+#     if _twilio_client is not None:
+#         return _twilio_client
 
-    try:
-        from twilio.http.async_http_client import AsyncTwilioHttpClient  # type: ignore
-        from twilio.rest import Client as TwilioRestClient  # type: ignore
+#     try:
+#         from dotenv import load_dotenv
+#         load_dotenv()
+#     except Exception:
+#         pass
 
-        # If aiohttp available, create session with TCPConnector for pooling
-        if aiohttp and TCPConnector:
-            connector = TCPConnector(limit=pool_limit, limit_per_host=pool_per_host, force_close=False)
-            _twilio_http_session = aiohttp.ClientSession(connector=connector)
-            _twilio_client = TwilioRestClient(account_sid, auth_token, http_client=AsyncTwilioHttpClient(session=_twilio_http_session))
-        else:
-            # aiohttp not present — still try to use AsyncTwilioHttpClient without explicit session
-            _twilio_client = TwilioRestClient(account_sid, auth_token, http_client=AsyncTwilioHttpClient())
-    except Exception:
-        # Fallback to sync Twilio client (we will offload calls to thread)
-        try:
-            from twilio.rest import Client as TwilioRestClient  # type: ignore
-            _twilio_client = TwilioRestClient(account_sid, auth_token)
-        except Exception as e:
-            print(f"[BulkSearch] Failed to initialize Twilio client: {e}")
-            _twilio_client = None
+#     account_sid = os.getenv('TWILIO_ACCOUNT_SID')
+#     auth_token = os.getenv('TWILIO_AUTH_TOKEN')
+#     if not account_sid or not auth_token:
+#         print("[BulkSearch] TWILIO_ACCOUNT_SID or TWILIO_AUTH_TOKEN not set; Twilio disabled")
+#         return None
 
-    return _twilio_client
+#     # Read pooling config from env, with sane defaults
+#     try:
+#         pool_limit = int(os.getenv('TWILIO_POOL_LIMIT', '50'))
+#     except Exception:
+#         pool_limit = 50
+#     try:
+#         pool_per_host = int(os.getenv('TWILIO_POOL_PER_HOST', '25'))
+#     except Exception:
+#         pool_per_host = 25
+
+#     try:
+#         from twilio.http.async_http_client import AsyncTwilioHttpClient  # type: ignore
+#         from twilio.rest import Client as TwilioRestClient  # type: ignore
+
+#         # If aiohttp available, create session with TCPConnector for pooling
+#         if aiohttp and TCPConnector:
+#             connector = TCPConnector(limit=pool_limit, limit_per_host=pool_per_host, force_close=False)
+#             _twilio_http_session = aiohttp.ClientSession(connector=connector)
+#             _twilio_client = TwilioRestClient(account_sid, auth_token, http_client=AsyncTwilioHttpClient(session=_twilio_http_session))
+#         else:
+#             # aiohttp not present — still try to use AsyncTwilioHttpClient without explicit session
+#             _twilio_client = TwilioRestClient(account_sid, auth_token, http_client=AsyncTwilioHttpClient())
+#     except Exception:
+#         # Fallback to sync Twilio client (we will offload calls to thread)
+#         try:
+#             from twilio.rest import Client as TwilioRestClient  # type: ignore
+#             _twilio_client = TwilioRestClient(account_sid, auth_token)
+#         except Exception as e:
+#             print(f"[BulkSearch] Failed to initialize Twilio client: {e}")
+#             _twilio_client = None
+
+#     return _twilio_client
+
+
 
 async def send_whatsapp_message(phone_number: str, message: str):
     """
@@ -1374,7 +1440,7 @@ async def send_whatsapp_message(phone_number: str, message: str):
     Tries async path first; falls back to running sync call in thread if needed.
     """
     try:
-        client = _get_twilio_client()
+        client = await _get_twilio_client()
         if not client:
             print("[BulkSearch] Twilio client not configured")
             return
@@ -1913,7 +1979,19 @@ async def execute_bulk_search_background(**kwargs):
 # ------------------------------
 # Graceful shutdown function
 # ------------------------------
+
+async def close_twilio_session():
+    """Gracefully close Twilio aiohttp session (if open)"""
+    global _twilio_http_session
+    if _twilio_http_session and not _twilio_http_session.closed:
+        await _twilio_http_session.close()
+        print("[BulkSearch] Closed Twilio aiohttp session cleanly")
+
 def shutdown():
     """Graceful shutdown of background workers"""
     stop_background_worker()
+    try:
+        asyncio.run(close_twilio_session())
+    except Exception:
+        pass
     print("[BulkSearch] Shutdown completed")
