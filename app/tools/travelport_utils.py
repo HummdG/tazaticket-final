@@ -767,9 +767,31 @@ async def search_single_date_async(payload_func, origin: str, destination: str, 
             carriers=carriers
         )
         result = await _invoke_travelport_async(payload, trip_type=trip_type)
+        
+        # 🧩 DEBUG: Dump raw Travelport response (short preview)
+        try:
+            if isinstance(result, dict):
+                print(f"[TravelportDebug] Raw result for {origin}->{destination} on {date}:")
+                if "error" in result:
+                    print(f"[TravelportDebug] Error field present: {result['error']}")
+                elif "summary" not in result:
+                    print(f"[TravelportDebug] No 'summary' found. Keys: {list(result.keys())[:10]}")
+                else:
+                    print(f"[TravelportDebug] Summary keys: {list(result.get('summary', {}).keys())[:10]}")
+                    if "CatalogProductOfferingsResponse" in json.dumps(result)[:1000]:
+                        print("[TravelportDebug] ✅ Travelport returned valid CatalogProductOfferingsResponse structure")
+                    else:
+                        snippet = json.dumps(result, indent=2)[:1200]
+                        print(f"[TravelportDebug] Response snippet:\n{snippet}")
+            else:
+                print(f"[TravelportDebug] Unexpected Travelport result type for {origin}->{destination}: {type(result)}")
+        except Exception as debug_e:
+            print(f"[TravelportDebug] Failed to log raw result: {debug_e}")
+        
         if isinstance(result, dict):
             result["search_date"] = date
         return result
+    
     except Exception as e:
         return {
             "ok": False,
