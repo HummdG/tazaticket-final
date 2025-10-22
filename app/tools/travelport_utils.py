@@ -1425,7 +1425,8 @@ async def _get_twilio_client():
                 _twilio_client = TwilioRestClient(
                     account_sid,
                     auth_token,
-                    http_client=AsyncTwilioHttpClient(session=_twilio_http_session)
+                    # http_client=AsyncTwilioHttpClient(session=_twilio_http_session)
+                    http_client=AsyncTwilioHttpClient()
                 )
                 print("[BulkSearch] Initialized Twilio async client with pooled aiohttp session")
             else:
