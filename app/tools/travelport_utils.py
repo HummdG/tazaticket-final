@@ -774,7 +774,7 @@ async def _invoke_travelport_async(payload: Dict[str, Any], trip_type: str = "on
 
     try:
         print(f"[TravelportDebug] 🚀 Calling TravelportSearch async function directly (trip_type={trip_type})")
-        return await TravelportSearch(payload, trip_type=trip_type)
+        return await TravelportSearch.ainvoke({"payload": payload, "trip_type": trip_type})
     except Exception as direct_e:
         print(f"[TravelportDebug] ⚠️ Direct async call failed: {direct_e}")
 
