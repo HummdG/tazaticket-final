@@ -886,21 +886,44 @@ async def bulk_search_cheapest_async(origin: str, destination: str, dates: List[
 
     for result in results:
         if isinstance(result, Exception):
+            print(f"[BulkSearch] ⚠️ Skipping failed result: {result}")
             continue
-        if isinstance(result, dict) and result.get("ok") and result.get("summary"):
+
+        if isinstance(result, dict):
+            # Log summary of each result for clarity
+            if not result.get("ok"):
+                print(f"[BulkSearch] ⚠️ Travelport returned non-ok result: {result.get('error', 'unknown error')}")
+                continue
+
+            summary = result.get("summary")
+            if not summary:
+                print(f"[BulkSearch] ⚠️ Missing summary in result for {result.get('search_date', 'unknown date')}")
+                continue
+
             valid_results.append(result)
-            
+
             # Extract price based on trip type
-            summary = result["summary"]
+            price = None
             if trip_type == "round-trip" and summary.get("price_total"):
                 price = summary["price_total"].get("total")
             elif trip_type == "one-way" and summary.get("price"):
                 price = summary["price"].get("total")
-            else:
-                continue
-            if price and float(price) < cheapest_price:
-                cheapest_price = float(price)
-                cheapest_result = result
+
+            if price:
+                try:
+                    price_val = float(price)
+                    if price_val < cheapest_price:
+                        cheapest_price = price_val
+                        cheapest_result = result
+                except Exception as e:
+                    print(f"[BulkSearch] ⚠️ Invalid price format: {price} ({e})")
+                    continue
+
+    # --- Post-processing & graceful fallback ---
+    if not valid_results:
+        print(f"[BulkSearch] ❌ No valid results — all {len(dates)} searches failed or returned no summary")
+    else:
+        print(f"[BulkSearch] ✅ {len(valid_results)} valid results out of {len(dates)} searches")
 
     return {
         "ok": len(valid_results) > 0,
@@ -909,8 +932,47 @@ async def bulk_search_cheapest_async(origin: str, destination: str, dates: List[
         "total_searches": len(dates),
         "successful_searches": len(valid_results),
         "all_results": valid_results,
-        "search_summary": f"Searched {len(dates)} dates, found {len(valid_results)} valid options"
+        "search_summary": (
+            f"Searched {len(dates)} dates, "
+            f"found {len(valid_results)} valid options. "
+            f"{'Cheapest: ' + str(cheapest_price) if cheapest_price != float('inf') else 'No valid price found.'}"
+        )
     }
+
+
+    # valid_results = []
+    # cheapest_result = None
+    # cheapest_price = float('inf')
+
+    # for result in results:
+    #     if isinstance(result, Exception):
+    #         continue
+    #     if isinstance(result, dict) and result.get("ok") and result.get("summary"):
+    #         valid_results.append(result)
+            
+    #         # Extract price based on trip type
+    #         summary = result["summary"]
+    #         if trip_type == "round-trip" and summary.get("price_total"):
+    #             price = summary["price_total"].get("total")
+    #         elif trip_type == "one-way" and summary.get("price"):
+    #             price = summary["price"].get("total")
+    #         else:
+    #             continue
+    #         if price and float(price) < cheapest_price:
+    #             cheapest_price = float(price)
+    #             cheapest_result = result
+
+    # return {
+    #     "ok": len(valid_results) > 0,
+    #     "cheapest_result": cheapest_result,
+    #     "cheapest_price": cheapest_price if cheapest_price != float('inf') else None,
+    #     "total_searches": len(dates),
+    #     "successful_searches": len(valid_results),
+    #     "all_results": valid_results,
+    #     "search_summary": f"Searched {len(dates)} dates, found {len(valid_results)} valid options"
+    # }
+
+
 
 def bulk_search_cheapest_sync(origin: str, destination: str, dates: List[str],
                               number_of_passengers: int, carriers: List[str],
