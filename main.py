@@ -217,15 +217,31 @@ async def twilio_whatsapp(
                 english_text = Body
                 detected_language = "en"
             
-            # For non-English messages, queue for background processing to avoid timeouts
-            if detected_language != "en":
-                reply_text = queue_text_processing(Body, thread_id, From, detected_language)
+            # # For non-English messages, queue for background processing to avoid timeouts
+            # if detected_language != "en":
+            #     reply_text = queue_text_processing(Body, thread_id, From, detected_language)
                 
-                # Return immediate acknowledgment
+            #     # Return immediate acknowledgment
+            #     twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+            #     <Response>
+            #         <Message>{html.escape(reply_text)}</Message>
+            #     </Response>"""
+
+            # For non-English messages or heavy English searches (e.g. flight/ticket/travel)
+            heavy_keywords = ["flight", "ticket", "travel", "book", "trip", "journey"]
+            is_heavy_english = detected_language == "en" and any(k in english_text.lower() for k in heavy_keywords)
+
+            if detected_language != "en" or is_heavy_english:
+                reply_text = queue_text_processing(Body, thread_id, From, detected_language)
+                print(f"[Webhook] Routed message to background queue (heavy={is_heavy_english}, lang={detected_language})")
+
+                # Immediate ACK to Twilio to avoid 499 timeout
                 twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
                 <Response>
                     <Message>{html.escape(reply_text)}</Message>
                 </Response>"""
+                return Response(content=twiml, media_type="application/xml")
+
             else:
                 # Process English messages synchronously as before
                 # Process through LangGraph with English text
