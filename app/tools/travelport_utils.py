@@ -1079,7 +1079,9 @@ async def _get_active_searches() -> set:
     """Get current active searches from Redis"""
     redis_conn = await _get_redis_queue_connection()
     active_searches = await redis_conn.smembers("active_searches")
-    return {search.decode('utf-8') for search in active_searches} if active_searches else set()
+    # return {search.decode('utf-8') for search in active_searches} if active_searches else set()
+    return {search.decode('utf-8') if isinstance(search, bytes) else search for search in active_searches} if active_searches else set()
+
 
 async def _add_active_search(search_key: str):
     """Add a search key to active searches in Redis"""
