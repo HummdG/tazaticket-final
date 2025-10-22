@@ -772,14 +772,16 @@ async def _invoke_travelport_async(payload: Dict[str, Any], trip_type: str = "on
         print(f"[TravelportDebug] ❌ Import error loading TravelportSearch: {e}")
         raise
 
-    if inspect.iscoroutinefunction(TravelportSearch):
+    try:
         print(f"[TravelportDebug] 🚀 Calling TravelportSearch async function directly (trip_type={trip_type})")
         return await TravelportSearch(payload, trip_type=trip_type)
+    except Exception as direct_e:
+        print(f"[TravelportDebug] ⚠️ Direct async call failed: {direct_e}")
 
-    if hasattr(TravelportSearch, "invoke"):
-        print(f"[TravelportDebug] 🚀 Calling TravelportSearch.invoke() method (trip_type={trip_type})")
-        invoke = getattr(TravelportSearch, "invoke")
-        return await invoke({"payload": payload, "trip_type": trip_type})
+    # if hasattr(TravelportSearch, "invoke"):
+    #     print(f"[TravelportDebug] 🚀 Calling TravelportSearch.invoke() method (trip_type={trip_type})")
+    #     invoke = getattr(TravelportSearch, "invoke")
+    #     return await invoke({"payload": payload, "trip_type": trip_type})
 
     raise RuntimeError("Unsupported TravelportSearch type — expected async function or Tool")
 
@@ -813,6 +815,7 @@ async def search_single_date_async(payload_func, origin: str, destination: str, 
         )
         print(f"[TravelportDebug] Sending payload for {origin}->{destination} ({date}): {json.dumps(payload)[:600]}")
         result = await _invoke_travelport_async(payload, trip_type=trip_type)
+        print(f"[TravelportDebug] Received result for {origin}->{destination} ({date})")
         
         # 🧩 DEBUG: Dump raw Travelport response (short preview)
         try:
