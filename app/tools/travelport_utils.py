@@ -758,7 +758,7 @@ def _invoke_travelport_sync(payload: Dict[str, Any], trip_type: str = "one-way")
 
     # Tool-style object with .invoke() method
     if hasattr(TravelportSearch, "invoke"):
-        return TravelportSearch.invoke({"payload": payload, "trip_type": trip_type})
+        return TravelportSearch.ainvoke({"payload": payload, "trip_type": trip_type})
 
     raise RuntimeError("Unsupported TravelportSearch type — expected async function or Tool")
 

@@ -380,7 +380,7 @@ async def FlightSearchStateMachine(
                     number_of_passengers=sm.number_of_passengers,
                     carriers=parse_carrier_preference(user_input_text or "")
                 )
-                result = await TravelportSearch.invoke({"payload": payload, "trip_type": "one-way"})
+                result = await TravelportSearch.ainvoke({"payload": payload, "trip_type": "one-way"})
             else:
                 payload = RoundTripFlightSearch(
                     origin=sm.origin,
@@ -390,7 +390,7 @@ async def FlightSearchStateMachine(
                     number_of_passengers=sm.number_of_passengers,
                     carriers=parse_carrier_preference(user_input_text or "")
                 )
-                result = await TravelportSearch.invoke({"payload": payload, "trip_type": "round-trip"})
+                result = await TravelportSearch.ainvoke({"payload": payload, "trip_type": "round-trip"})
     
             # Handle result
             if result.get("ok"):
