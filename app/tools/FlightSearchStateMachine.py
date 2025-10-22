@@ -358,7 +358,8 @@ async def FlightSearchStateMachine(
             )
     
             try:
-                result = await BulkFlightSearch(**bulk_args)
+                # result = await BulkFlightSearch.ainvoke(**bulk_args)
+                result = await BulkFlightSearch.ainvoke(bulk_args)
                 await _save_state_machine_to_redis(thread_id, ConversationFlowSM())  # reset FSM
                 return (
                     "✅ All flight search parameters have been set successfully. "
