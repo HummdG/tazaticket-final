@@ -1,3 +1,4 @@
+import json
 from langchain_core.tools import tool
 from dotenv import load_dotenv
 import os
@@ -113,6 +114,11 @@ async def TravelportSearch(payload: dict, trip_type: str = "one-way"):
     # Step 2: Call catalog
     try:
         resp_json = await fetch_catalog(CATALOG_URL, headers, payload)
+        try:
+            print("[TravelportDebug] ✅ Travelport responded:", json.dumps(resp_json)[:800])
+        except Exception as e:
+            print("[TravelportDebug] ⚠️ Failed to print Travelport raw response:", e)
+
 
         # Extract summary
         if trip_type == "one-way":
