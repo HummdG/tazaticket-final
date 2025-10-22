@@ -717,41 +717,86 @@ def extract_return_duration(user_input: str) -> Optional[int]:
 # ------------------------------
 # Travelport invoke helpers (Done: kept internal, but works with both sync/async invoke)
 # ------------------------------
+# def _invoke_travelport_sync(payload: Dict[str, Any], trip_type: str = "one-way") -> Dict[str, Any]:
+#     try:
+#         from .TravelportSearch import TravelportSearch
+#     except Exception as e:
+#         raise RuntimeError(f"unable to import TravelportSearch: {e}")
+
+#     invoke = getattr(TravelportSearch, "invoke", None)
+#     if not invoke:
+#         raise RuntimeError("TravelportSearch.invoke missing")
+
+#     if inspect.iscoroutinefunction(invoke):
+#         try:
+#             loop = asyncio.get_running_loop()
+#             # If we're in a running loop, schedule and wait for the result
+#             return loop.run_until_complete(invoke({"payload": payload, "trip_type": trip_type}))
+#         except RuntimeError:
+#             # No running event loop, safe to use asyncio.run()
+#             return asyncio.run(invoke({"payload": payload, "trip_type": trip_type}))
+#     else:
+#         return invoke({"payload": payload, "trip_type": trip_type})
 def _invoke_travelport_sync(payload: Dict[str, Any], trip_type: str = "one-way") -> Dict[str, Any]:
+    """
+    Safely invoke the TravelportSearch tool from sync context.
+    Supports both async function and LangChain Tool-style .invoke().
+    """
     try:
         from .TravelportSearch import TravelportSearch
     except Exception as e:
         raise RuntimeError(f"unable to import TravelportSearch: {e}")
 
-    invoke = getattr(TravelportSearch, "invoke", None)
-    if not invoke:
-        raise RuntimeError("TravelportSearch.invoke missing")
-
-    if inspect.iscoroutinefunction(invoke):
+    # Direct async function (current TravelportSearch is an async def)
+    if inspect.iscoroutinefunction(TravelportSearch):
         try:
             loop = asyncio.get_running_loop()
-            # If we're in a running loop, schedule and wait for the result
-            return loop.run_until_complete(invoke({"payload": payload, "trip_type": trip_type}))
         except RuntimeError:
-            # No running event loop, safe to use asyncio.run()
-            return asyncio.run(invoke({"payload": payload, "trip_type": trip_type}))
-    else:
-        return invoke({"payload": payload, "trip_type": trip_type})
+            return asyncio.run(TravelportSearch(payload, trip_type=trip_type))
+        else:
+            return loop.run_until_complete(TravelportSearch(payload, trip_type=trip_type))
+
+    # Tool-style object with .invoke() method
+    if hasattr(TravelportSearch, "invoke"):
+        return TravelportSearch.invoke({"payload": payload, "trip_type": trip_type})
+
+    raise RuntimeError("Unsupported TravelportSearch type — expected async function or Tool")
 
 async def _invoke_travelport_async(payload: Dict[str, Any], trip_type: str = "one-way") -> Dict[str, Any]:
+    """
+    Async-safe wrapper to call TravelportSearch regardless of implementation type.
+    """
     try:
         from .TravelportSearch import TravelportSearch
     except Exception as e:
-        raise RuntimeError(f"unable to import TravelportSearch: {e}")
+        print(f"[TravelportDebug] ❌ Import error loading TravelportSearch: {e}")
+        raise
 
-    invoke = getattr(TravelportSearch, "invoke", None)
-    if not invoke:
-        raise RuntimeError("TravelportSearch.invoke missing")
+    if inspect.iscoroutinefunction(TravelportSearch):
+        print(f"[TravelportDebug] 🚀 Calling TravelportSearch async function directly (trip_type={trip_type})")
+        return await TravelportSearch(payload, trip_type=trip_type)
 
-    if inspect.iscoroutinefunction(invoke):
+    if hasattr(TravelportSearch, "invoke"):
+        print(f"[TravelportDebug] 🚀 Calling TravelportSearch.invoke() method (trip_type={trip_type})")
+        invoke = getattr(TravelportSearch, "invoke")
         return await invoke({"payload": payload, "trip_type": trip_type})
-    else:
-        return await asyncio.to_thread(invoke, {"payload": payload, "trip_type": trip_type})
+
+    raise RuntimeError("Unsupported TravelportSearch type — expected async function or Tool")
+
+# async def _invoke_travelport_async(payload: Dict[str, Any], trip_type: str = "one-way") -> Dict[str, Any]:
+#     try:
+#         from .TravelportSearch import TravelportSearch
+#     except Exception as e:
+#         raise RuntimeError(f"unable to import TravelportSearch: {e}")
+
+#     invoke = getattr(TravelportSearch, "invoke", None)
+#     if not invoke:
+#         raise RuntimeError("TravelportSearch.invoke missing")
+
+#     if inspect.iscoroutinefunction(invoke):
+#         return await invoke({"payload": payload, "trip_type": trip_type})
+#     else:
+#         return await asyncio.to_thread(invoke, {"payload": payload, "trip_type": trip_type})
 
 # ------------------------------
 # Single-date async search (public)
@@ -766,6 +811,7 @@ async def search_single_date_async(payload_func, origin: str, destination: str, 
             number_of_passengers=number_of_passengers,
             carriers=carriers
         )
+        print(f"[TravelportDebug] Sending payload for {origin}->{destination} ({date}): {json.dumps(payload)[:600]}")
         result = await _invoke_travelport_async(payload, trip_type=trip_type)
         
         # 🧩 DEBUG: Dump raw Travelport response (short preview)

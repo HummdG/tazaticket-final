@@ -68,7 +68,10 @@ async def fetch_catalog(CATALOG_URL, headers, payload):
 
 @tool("TravelportSearch")
 async def TravelportSearch(payload: dict, trip_type: str = "one-way"):
+
     """This tool calls the travelport rest api to get the cheapest flight possible for the user's given parameters"""
+    print(f"[TravelportDebug] 🛰️ TravelportSearch called with trip_type={trip_type}")
+    print(f"[TravelportDebug] Payload keys: {list(payload.keys())[:10]}")
     load_dotenv()  # Reads .env in current directory
 
     CLIENT_ID       = os.getenv("TRAVELPORT_CLIENT_ID")
@@ -122,7 +125,9 @@ async def TravelportSearch(payload: dict, trip_type: str = "one-way"):
             cheapest_flight_price = resp_json["CatalogProductOfferingsResponse"]["CatalogProductOfferings"]["CatalogProductOffering"][0]["ProductBrandOptions"][0]["ProductBrandOffering"][0]["BestCombinablePrice"]["TotalPrice"]
         except (KeyError, IndexError):
             cheapest_flight_price = None
-
+        
+        print(f"[TravelportDebug] 🛰️ TravelportSearch called with trip_type={trip_type}")
+        print(f"[TravelportDebug] Payload keys: {list(payload.keys())[:10]}")
         return {
             "ok": True,
             "price": cheapest_flight_price,
