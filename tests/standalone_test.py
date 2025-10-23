@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Simple test for search result features without external dependencies.
+Standalone test for search result features without external dependencies.
 Tests the core functionality in isolation.
 """
 
@@ -177,30 +177,30 @@ class MockSearchResultManager:
     def format_flight_option_for_display(self, option: FlightOption) -> str:
         """Format a flight option for user display"""
         return (
-            f"Route: {option.departure} -> {option.arrival}\n"
-            f"Time: {option.departure_time} - {option.arrival_time} ({option.duration})\n"
-            f"Airline: {option.airline} {option.flight_number}\n"
-            f"Price: {option.price} {option.currency} ({option.cabin_class})\n"
-            f"Baggage: {option.baggage_info.get('carry_on_text', 'Check details')}\n"
-            f"Changes: {option.penalties.get('change', 'Free')} | Cancellation: {option.penalties.get('cancel', 'Free')}\n"
+            f"✈️ {option.departure} → {option.arrival}\n"
+            f"🕐 {option.departure_time} - {option.arrival_time} ({option.duration})\n"
+            f"🏢 {option.airline} {option.flight_number}\n"
+            f"💰 {option.price} {option.currency} ({option.cabin_class})\n"
+            f"🧳 Baggage: {option.baggage_info.get('carry_on_text', 'Check details')}\n"
+            f"📋 Changes: {option.penalties.get('change', 'Free')} | Cancellation: {option.penalties.get('cancel', 'Free')}\n"
         )
 
     def format_search_results_for_display(self, search_result: SearchResult) -> str:
         """Format complete search results for user display"""
         if not search_result.flight_options:
-            return "No flights found for your search criteria."
+            return "❌ No flights found for your search criteria."
 
         # Sort by price and take top 5
         sorted_options = sorted(search_result.flight_options, key=lambda x: x.price)[:5]
 
-        response = f"Found {len(search_result.flight_options)} flight options for {search_result.origin} -> {search_result.destination}\n\n"
+        response = f"🎯 Found {len(search_result.flight_options)} flight options for {search_result.origin} → {search_result.destination}\n\n"
 
         for i, option in enumerate(sorted_options, 1):
             response += f"**Option {i}:**\n"
             response += self.format_flight_option_for_display(option)
             response += "\n"
 
-        response += f"\nShowing top {len(sorted_options)} cheapest options. Use the option number to get more details!"
+        response += f"\n💡 Showing top {len(sorted_options)} cheapest options. Use the option number to get more details!"
 
         return response
 
@@ -227,44 +227,44 @@ def test_search_result_storage():
     try:
         # Store search result
         search_id = manager.store_search_result(wa_id, thread_id, search_data)
-        print(f"Search result stored with ID: {search_id}")
+        print(f"✅ Search result stored with ID: {search_id}")
 
         # Retrieve search result
         retrieved_result = manager.get_search_result(search_id)
         if retrieved_result:
-            print(f"Search result retrieved successfully: {len(retrieved_result.flight_options)} options")
-            print(f"Route: {retrieved_result.origin} -> {retrieved_result.destination}")
-            print(f"Cheapest: {retrieved_result.flight_options[0].price} {retrieved_result.flight_options[0].currency}")
+            print(f"✅ Search result retrieved successfully: {len(retrieved_result.flight_options)} options")
+            print(f"   Route: {retrieved_result.origin} → {retrieved_result.destination}")
+            print(f"   Cheapest: {retrieved_result.flight_options[0].price} {retrieved_result.flight_options[0].currency}")
         else:
-            print("Failed to retrieve search result")
+            print("❌ Failed to retrieve search result")
             return False
 
         # Test user search history
         search_history = manager.get_user_search_history(wa_id)
         if search_id in search_history:
-            print(f"User search history updated: {len(search_history)} searches")
+            print(f"✅ User search history updated: {len(search_history)} searches")
         else:
-            print("User search history not updated")
+            print("❌ User search history not updated")
             return False
 
         # Test thread latest search
         latest_search_id = manager.get_latest_search_for_thread(thread_id)
         if latest_search_id == search_id:
-            print("Thread latest search updated correctly")
+            print("✅ Thread latest search updated correctly")
         else:
-            print("Thread latest search not updated")
+            print("❌ Thread latest search not updated")
             return False
 
         return True
 
     except Exception as e:
-        print(f"Error in search result storage test: {e}")
+        print(f"❌ Error in search result storage test: {e}")
         return False
 
 
 def test_search_result_formatting():
     """Test search result formatting for user display"""
-    print("\nTesting Search Result Formatting...")
+    print("\n🧪 Testing Search Result Formatting...")
 
     manager = MockSearchResultManager()
 
@@ -305,24 +305,24 @@ def test_search_result_formatting():
 
         # Test formatting
         formatted_display = manager.format_search_results_for_display(search_result)
-        print("Formatted display:")
+        print("✅ Formatted display:")
         print(formatted_display)
 
         # Test individual option formatting
         option_display = manager.format_flight_option_for_display(flight_option)
-        print("\nIndividual option display:")
+        print("\n✅ Individual option display:")
         print(option_display)
 
         return True
 
     except Exception as e:
-        print(f"Error in formatting test: {e}")
+        print(f"❌ Error in formatting test: {e}")
         return False
 
 
 def test_error_handling():
     """Test error handling and edge cases"""
-    print("\nTesting Error Handling...")
+    print("\n🧪 Testing Error Handling...")
 
     manager = MockSearchResultManager()
 
@@ -330,38 +330,38 @@ def test_error_handling():
         # Test with invalid search ID
         invalid_result = manager.get_search_result("invalid_id")
         if invalid_result is None:
-            print("Invalid search ID handled correctly")
+            print("✅ Invalid search ID handled correctly")
         else:
-            print("Invalid search ID not handled properly")
+            print("❌ Invalid search ID not handled properly")
             return False
 
         # Test with non-existent user
         empty_history = manager.get_user_search_history("non_existent_user")
         if empty_history == []:
-            print("Non-existent user handled correctly")
+            print("✅ Non-existent user handled correctly")
         else:
-            print("Non-existent user not handled properly")
+            print("❌ Non-existent user not handled properly")
             return False
 
         # Test with empty search data
         empty_result = manager.store_search_result("test_user", "test_thread", {})
         if empty_result:
-            print("Empty search data handled correctly")
+            print("✅ Empty search data handled correctly")
         else:
-            print("Empty search data not handled properly")
+            print("❌ Empty search data not handled properly")
             return False
 
         return True
 
     except Exception as e:
-        print(f"Error in error handling test: {e}")
+        print(f"❌ Error in error handling test: {e}")
         return False
 
 
-def run_simple_tests():
-    """Run all simple tests"""
-    print("Starting Simple Search Result Feature Tests")
-    print("=" * 50)
+def run_standalone_tests():
+    """Run all standalone tests"""
+    print("Starting Standalone Search Result Feature Tests\n")
+    print("=" * 60)
 
     tests = [
         ("Search Result Storage", test_search_result_storage),
@@ -377,49 +377,49 @@ def run_simple_tests():
         try:
             result = test_func()
             results.append((test_name, result))
-            status = "PASSED" if result else "FAILED"
+            status = "✅ PASSED" if result else "❌ FAILED"
             print(f"\n{status}")
             if result:
                 passed += 1
         except Exception as e:
             results.append((test_name, False))
-            print(f"\nFAILED with exception: {e}")
+            print(f"\n❌ FAILED with exception: {e}")
 
     # Summary
-    print(f"\n{'='*50}")
-    print("TEST SUMMARY")
-    print(f"{'='*50}")
+    print(f"\n{'='*60}")
+    print("📊 TEST SUMMARY")
+    print(f"{'='*60}")
 
     for test_name, result in results:
-        status = "PASSED" if result else "FAILED"
+        status = "✅ PASSED" if result else "❌ FAILED"
         print(f"{test_name:<25} {status}")
 
-    print(f"\nOverall: {passed}/{len(results)} tests passed")
+    print(f"\n🎯 Overall: {passed}/{len(results)} tests passed")
 
     if passed == len(results):
-        print("All tests passed! Core functionality is working correctly.")
-        print("\nNext Steps:")
+        print("🎉 All tests passed! Core functionality is working correctly.")
+        print("\n📋 Next Steps:")
         print("1. Test with Redis integration")
         print("2. Test with actual Travelport API responses")
         print("3. Test LangGraph integration")
         return True
     else:
-        print("Some tests failed. Please check the implementation.")
+        print("⚠️ Some tests failed. Please check the implementation.")
         return False
 
 
 if __name__ == "__main__":
-    success = run_simple_tests()
+    success = run_standalone_tests()
 
     if success:
-        print("\nAll tests completed successfully!")
-        print("\nFeatures Verified:")
-        print("  - Search result storage and retrieval")
-        print("  - User and thread association")
-        print("  - Flight option parsing and formatting")
-        print("  - Error handling and edge cases")
-        print("  - User-friendly display generation")
-        print("\nReady for integration with Redis and LangGraph!")
+        print("\n🎉 All standalone tests completed successfully!")
+        print("\n🔧 Features Verified:")
+        print("   ✅ Search result storage and retrieval")
+        print("   ✅ User and thread association")
+        print("   ✅ Flight option parsing and formatting")
+        print("   ✅ Error handling and edge cases")
+        print("   ✅ User-friendly display generation")
+        print("\n🚀 Ready for integration with Redis and LangGraph!")
     else:
-        print("\nSome tests failed. Please review the implementation.")
+        print("\n❌ Some tests failed. Please review the implementation.")
         exit(1)

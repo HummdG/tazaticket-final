@@ -4,12 +4,10 @@ Search Result Manager - Handles storage, retrieval, and formatting of Travelport
 
 import json
 import uuid
-import asyncio
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, asdict
-import aioredis
-from ..langgraph.redis_manager import redis_manager
+import redis.asyncio as redis
 
 
 @dataclass
@@ -77,6 +75,7 @@ class SearchResultManager:
     async def get_connection(self):
         """Get Redis connection"""
         if self.redis_conn is None:
+            from ..langgraph.redis_manager import redis_manager
             self.redis_conn = await redis_manager.get_connection()
         return self.redis_conn
 
