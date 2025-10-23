@@ -16,6 +16,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langchain_core.messages import ToolMessage, HumanMessage, AIMessage
 
 from ..tools.FlightSearchStateMachine import FlightSearchStateMachine, BulkFlightSearch
+from ..tools.SearchResultTool import SearchResultManager, StoreSearchResult
 from .memory_manager import memory_manager
 
 # Global variable to store current thread_id for tools
@@ -132,7 +133,7 @@ def create_graph():
         raise ValueError("OPENAI_API_KEY environment variable is not set")
     
     # Initialize tools
-    tools = [FlightSearchStateMachine, BulkFlightSearch]
+    tools = [FlightSearchStateMachine, BulkFlightSearch, SearchResultManager, StoreSearchResult]
     
     # Initialize LLM
     llm = init_chat_model("gpt-4o-mini", model_provider="openai", temperature=0)
@@ -148,9 +149,6 @@ def create_graph():
     # Add nodes
     graph_builder.add_node("chatbot", chatbot_node)
     
-    # # Create and add tool node
-    # tool_node = BasicToolNode(tools=tools)
-    # graph_builder.add_node("tools", tool_node)
     tool_node = BasicToolNode(tools=tools)
     async def tool_node_wrapper(state):
         return await tool_node(state)

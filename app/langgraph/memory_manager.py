@@ -171,7 +171,6 @@ class MemoryManager:
             print(f"[MemoryManager] Session {thread_state.thread_id} is idle ({idle_time:.0f}s > {SESSION_IDLE_SECONDS}s)")
         return is_idle
 
-    # 
     async def _evict_oldest_pair_to_batch(self, thread_id: str) -> None:
         """Move oldest pair from context to batch buffer (async-safe)."""
         print(f"[MemoryManager] _evict_oldest_pair_to_batch called for thread {thread_id}")
@@ -252,7 +251,6 @@ class MemoryManager:
                 # Save updated thread state to Redis
                 await self._save_thread_state_to_redis(thread_state)
 
-    #  DynamoDB Ops (for async) 
     async def _reserve_seq_block(self, thread_id: str, count: int) -> int:
         """
         Atomically increments the per-thread counter by `count` and returns the
@@ -755,8 +753,6 @@ class MemoryManager:
         except Exception as e:
             print(f"[MemoryManager] Warning: Could not prime InMemorySaver for thread {thread_id}: {e}")
 
-    # Background task handling utils
-    # transformed _shutdown_hook 
     async def _track_task(self, task: asyncio.Task) -> None:
         """Add task to pending set and attach a callback to remove/log on completion."""
         print(f"[MemoryManager] _track_task called for task {task}")
@@ -779,7 +775,6 @@ class MemoryManager:
 
         task.add_done_callback(_on_done)
 
-    # graceful shutdown 
     async def shutdown(self) -> None:
         """Gracefully flush pending work and wait for background tasks to complete.
 
@@ -808,7 +803,6 @@ class MemoryManager:
 
         print(f"[MemoryManager] Shutdown complete in {time.time() - start_time:.1f}s")
 
-    # sync-compat helper 
     def run_sync(self, coro):
         """Compatibility helper: run an async coroutine synchronously if needed.
 

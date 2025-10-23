@@ -778,10 +778,7 @@ async def _invoke_travelport_async(payload: Dict[str, Any], trip_type: str = "on
     except Exception as direct_e:
         print(f"[TravelportDebug] ⚠️ Direct async call failed: {direct_e}")
 
-    # if hasattr(TravelportSearch, "invoke"):
-    #     print(f"[TravelportDebug] 🚀 Calling TravelportSearch.invoke() method (trip_type={trip_type})")
-    #     invoke = getattr(TravelportSearch, "invoke")
-    #     return await invoke({"payload": payload, "trip_type": trip_type})
+
 
     raise RuntimeError("Unsupported TravelportSearch type — expected async function or Tool")
 
@@ -940,37 +937,7 @@ async def bulk_search_cheapest_async(origin: str, destination: str, dates: List[
     }
 
 
-    # valid_results = []
-    # cheapest_result = None
-    # cheapest_price = float('inf')
 
-    # for result in results:
-    #     if isinstance(result, Exception):
-    #         continue
-    #     if isinstance(result, dict) and result.get("ok") and result.get("summary"):
-    #         valid_results.append(result)
-            
-    #         # Extract price based on trip type
-    #         summary = result["summary"]
-    #         if trip_type == "round-trip" and summary.get("price_total"):
-    #             price = summary["price_total"].get("total")
-    #         elif trip_type == "one-way" and summary.get("price"):
-    #             price = summary["price"].get("total")
-    #         else:
-    #             continue
-    #         if price and float(price) < cheapest_price:
-    #             cheapest_price = float(price)
-    #             cheapest_result = result
-
-    # return {
-    #     "ok": len(valid_results) > 0,
-    #     "cheapest_result": cheapest_result,
-    #     "cheapest_price": cheapest_price if cheapest_price != float('inf') else None,
-    #     "total_searches": len(dates),
-    #     "successful_searches": len(valid_results),
-    #     "all_results": valid_results,
-    #     "search_summary": f"Searched {len(dates)} dates, found {len(valid_results)} valid options"
-    # }
 
 
 

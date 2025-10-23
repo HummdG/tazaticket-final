@@ -118,9 +118,6 @@ class ThreadState:
     context_pairs: List[Pair] = field(default_factory=list)
     batch_pairs: List[Pair] = field(default_factory=list)
     open_pair: Optional[Pair] = None
-    # default to asyncio.Lock for async-safe usage in MemoryManager
-    # lock: asyncio.Lock = field(default_factory=lambda: asyncio.Lock())
-    #  MEmoryManager already has an async function:  _ensure_thread_lock() that converts lock to asyncio.Lock()
     lock: threading.Lock = field(default_factory=threading.Lock)
     
     def to_dict(self):

@@ -12,6 +12,9 @@ load_dotenv()
 # --- LangGraph core imports ---
 from app.langgraph.graph_config import create_graph, invoke_graph, extract_last_ai_text
 
+# --- Search Result Management ---
+from app.services.search_result_manager import search_result_manager
+
 # --- Services ---
 from app.services.translation_service import TranslationService
 
@@ -117,6 +120,17 @@ async def process_text_message_background(user_message: str, thread_id: str, fro
         state = await invoke_graph(graph, english_text, thread_id, detected_language=detected_language)
         reply_text = extract_last_ai_text(state) or "Got it."
 
+        # Check if this response contains search results that should be stored
+        if hasattr(state, 'get') and state.get('messages'):
+            # Look for tool calls that might have generated search results
+            for message in state['messages']:
+                if hasattr(message, 'tool_calls') and message.tool_calls:
+                    for tool_call in message.tool_calls:
+                        if tool_call.get('name') in ['TravelportSearch', 'BulkFlightSearch']:
+                            # This was a search operation, but we need to check if we can extract results
+                            # The actual search results would be in the tool response
+                            pass
+
         print(f"[{time.strftime('%H:%M:%S')}] [TextProcessor] 🧠 Graph completed — reply extracted.", flush=True)
 
         # Step 3: Translate response back if needed
@@ -164,7 +178,7 @@ async def twilio_whatsapp(
         if MediaUrl0 and MediaContentType0 and not MediaContentType0.startswith("audio/"):
             reply_text = "Sorry, I can only process text messages and voice notes."
             twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
-<Response><Message>{html.escape(reply_text)}</Message></Response>"""
+                        <Response><Message>{html.escape(reply_text)}</Message></Response>"""
             return Response(content=twiml, media_type="application/xml")
 
         # Handle voice message

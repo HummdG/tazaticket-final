@@ -19,8 +19,6 @@ class TranslationService:
         # Create a single Google Translate async client to reuse connectioons
         # Done: reuse client for pooling
         try:
-            # TranslationServiceAsyncClient uses grpc_asyncio transport by default.
-            # self.gcloud_client = translate.TranslationServiceAsyncClient()
             self.gcloud_client = translate.TranslationServiceAsyncClient().from_service_account_file(
                 os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
             ) if os.getenv('GOOGLE_APPLICATION_CREDENTIALS') else None

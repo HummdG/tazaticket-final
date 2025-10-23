@@ -17,6 +17,7 @@ from ..statemachine.ConversationFlowSM import ConversationFlowSM
 from ..payloads.OneWayFlightSearch import OneWayFlightSearch
 from ..payloads.RoundTripFlightSearch import RoundTripFlightSearch
 from .TravelportSearch import TravelportSearch
+from ..services.search_result_manager import search_result_manager
 from .airline_codes import (
     DEFAULT_PREFERRED_CARRIERS, 
     get_airline_name, 
@@ -242,101 +243,7 @@ async def FlightSearchStateMachine(
     # Check if complete and perform search
     print(f"[FSM] All parameters collected for {thread_id}. Triggering search automatically.")
 
-    # if sm.get_state() == "complete":
-    #     print(f"[FSM] Current complete state for {thread_id}: {sm.get_state()}")
-    #     try:
-    #         if sm.type_of_trip == "one-way":
-    #             payload = OneWayFlightSearch(
-    #                 origin=sm.origin,
-    #                 destination=sm.destination,
-    #                 departure_date=sm.departure_date,
-    #                 number_of_passengers=sm.number_of_passengers,
-    #                 carriers=preferred_carriers
-    #             )
-    #             # Call async TravelportSearch directly 
-    #             result = await TravelportSearch.invoke({"payload": payload, "trip_type": "one-way"})
-    #         else:
-    #             payload = RoundTripFlightSearch(
-    #                 origin=sm.origin,
-    #                 destination=sm.destination,
-    #                 departure_date=sm.departure_date,
-    #                 return_date=sm.return_date,
-    #                 number_of_passengers=sm.number_of_passengers,
-    #                 carriers=preferred_carriers
-    #             )
-    #             # Call TravelportSearch directly (assuming it's properly async)
-    #             result = await TravelportSearch.invoke({"payload": payload, "trip_type": "round-trip"})
 
-    #         if result.get("ok"):
-    #             summary = result.get("summary")
-    #             if summary:
-    #                 # Format detailed flight information
-    #                 if summary.get("price_total"):  # Round-trip
-    #                     price = summary["price_total"]
-    #                     outbound = summary.get("outbound", {})
-    #                     inbound = summary.get("inbound", {})
-                        
-    #                     # Initialize response for round-trip
-    #                     response = f"✈️ Round-trip flight found: {summary['price_total']} {summary['currency']}\n"
-                        
-    #                     if outbound:
-    #                         duration = format_duration(outbound.get("duration_minutes_total"))
-    #                         stops = format_stops(outbound.get("stops_total", 0))
-    #                         response += f"🛫 Outbound: {duration}, {stops}\n"
-    #                         if outbound.get("baggage"):
-    #                             response += f"   Baggage: {format_baggage_summary(outbound['baggage'])}\n"
-    #                         lf = format_layovers(outbound.get("itinerary"))
-    #                         if lf:
-    #                             response += lf
-                        
-    #                     if inbound:
-    #                         duration = format_duration(inbound.get("duration_minutes_total"))
-    #                         stops = format_stops(inbound.get("stops_total", 0))
-    #                         response += f"🛬 Return: {duration}, {stops}\n"
-    #                         if inbound.get("baggage"):
-    #                             response += f"   Baggage: {format_baggage_summary(inbound['baggage'])}\n"
-    #                         lf = format_layovers(inbound.get("itinerary"))
-    #                         if lf:
-    #                             response += lf
-                        
-    #                     # Reset state machine after successful search
-    #                     await _save_state_machine_to_redis(thread_id, ConversationFlowSM())
-    #                     return response
-    #                 else:  # One-way
-    #                     price = summary.get("price", {})
-    #                     price_text = f"{price.get('total')} {price.get('currency')}" if price.get('total') else "Price not available"
-                        
-    #                     duration = format_duration(summary.get("duration_minutes_total"))
-    #                     stops = format_stops(summary.get("stops_total", 0))
-                        
-    #                     response = f"✈️ One-way flight found: {price_text}\n"
-    #                     response += f"🛫 Flight: {duration}, {stops}\n"
-    #                     it = (summary.get("itinerary") or {})
-                        
-    #                     if it.get("airlines"):
-    #                         response += f"Airline: {it['airlines']}\n"
-    #                     if it.get("flight_numbers"):
-    #                         response += f"Flight no.: {it['flight_numbers']}\n"
-    #                     lf = format_layovers(it)
-    #                     if lf:
-    #                         response += lf
-                        
-    #                     if summary.get("baggage"):
-    #                         response += f"Baggage: {format_baggage_summary(summary['baggage'])}\n"
-                        
-    #                     # Reset state machine after successful search
-    #                     await _save_state_machine_to_redis(thread_id, ConversationFlowSM())
-    #                     return response
-                
-    #             # Fallback if no summary
-    #             # Reset state machine after successful search
-    #             await _save_state_machine_to_redis(thread_id, ConversationFlowSM())
-    #             return f"Flight search completed! Found flights for {sm.origin} to {sm.destination} on {sm.departure_date}."
-    #         else:
-    #             return f"Sorry, I couldn't find flights. Error: {result.get('error', 'Unknown error')}"
-                
-    #     except Exception as e:
-    #         return f"Sorry, there was an error searching for flights: {str(e)}"
     
     if sm.get_state() == "complete":
         print(f"[FSM] All parameters collected for {thread_id}. Checking for bulk search intent...")
@@ -360,6 +267,26 @@ async def FlightSearchStateMachine(
             try:
                 # result = await BulkFlightSearch.ainvoke(**bulk_args)
                 result = await BulkFlightSearch.ainvoke(bulk_args)
+
+                # Store bulk search results if successful
+                if result and "CHEAPEST OPTION FOUND" in str(result):
+                    try:
+                        # Extract search parameters for storage
+                        search_data = {
+                            "origin": sm.origin,
+                            "destination": sm.destination,
+                            "search_date": "",  # Bulk search covers multiple dates
+                            "trip_type": "bulk-search",
+                            "passengers": sm.number_of_passengers,
+                            "raw_response": {"bulk_result": str(result)},
+                            "detected_language": detected_language
+                        }
+                        await search_result_manager.store_search_result(
+                            thread_id, thread_id, search_data
+                        )
+                        print(f"[FSM] Stored bulk search results for thread {thread_id}")
+                    except Exception as e:
+                        print(f"[FSM] Error storing bulk search results: {e}")
                 await _save_state_machine_to_redis(thread_id, ConversationFlowSM())  # reset FSM
                 return (
                     "✅ All flight search parameters have been set successfully. "
@@ -381,6 +308,25 @@ async def FlightSearchStateMachine(
                     carriers=parse_carrier_preference(user_input_text or "")
                 )
                 result = await TravelportSearch.ainvoke({"payload": payload, "trip_type": "one-way"})
+
+                # Store search results if successful
+                if result.get("ok"):
+                    try:
+                        search_data = {
+                            "origin": sm.origin,
+                            "destination": sm.destination,
+                            "search_date": sm.departure_date,
+                            "trip_type": "one-way",
+                            "passengers": sm.number_of_passengers,
+                            "raw_response": result.get("raw", {}),
+                            "detected_language": detected_language
+                        }
+                        await search_result_manager.store_search_result(
+                            thread_id, thread_id, search_data
+                        )
+                        print(f"[FSM] Stored search results for thread {thread_id}")
+                    except Exception as e:
+                        print(f"[FSM] Error storing search results: {e}")
             else:
                 payload = RoundTripFlightSearch(
                     origin=sm.origin,
@@ -391,6 +337,26 @@ async def FlightSearchStateMachine(
                     carriers=parse_carrier_preference(user_input_text or "")
                 )
                 result = await TravelportSearch.ainvoke({"payload": payload, "trip_type": "round-trip"})
+
+                # Store search results if successful
+                if result.get("ok"):
+                    try:
+                        search_data = {
+                            "origin": sm.origin,
+                            "destination": sm.destination,
+                            "search_date": sm.departure_date,
+                            "return_date": sm.return_date,
+                            "trip_type": "round-trip",
+                            "passengers": sm.number_of_passengers,
+                            "raw_response": result.get("raw", {}),
+                            "detected_language": detected_language
+                        }
+                        await search_result_manager.store_search_result(
+                            thread_id, thread_id, search_data
+                        )
+                        print(f"[FSM] Stored round-trip search results for thread {thread_id}")
+                    except Exception as e:
+                        print(f"[FSM] Error storing round-trip search results: {e}")
     
             # Handle result
             if result.get("ok"):
@@ -413,9 +379,7 @@ async def FlightSearchStateMachine(
             print(f"[FSM] Error during direct search for {thread_id}: {e}")
             return f"⚠️ I gathered all flight details, but there was an error during search: {e}"
     
-    # else:
-    #     missing = sm.get_missing_variables()
-    #     return f"Flight search in progress. Still need: {', '.join(missing)}. Please provide these details to continue."
+
 
 
     else:
