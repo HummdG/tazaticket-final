@@ -823,12 +823,18 @@ async def search_single_date_async(payload_func, origin: str, destination: str, 
                 elif "summary" not in result:
                     print(f"[TravelportDebug] No 'summary' found. Keys: {list(result.keys())[:10]}")
                 else:
-                    print(f"[TravelportDebug] Summary keys: {list(result.get('summary', {}).keys())[:10]}")
-                    if "CatalogProductOfferingsResponse" in json.dumps(result)[:1000]:
-                        print("[TravelportDebug] ✅ Travelport returned valid CatalogProductOfferingsResponse structure")
+                    summary = result.get('summary')
+                    if summary is None:
+                        print("[TravelportDebug] Summary is None")
+                    elif isinstance(summary, dict):
+                        print(f"[TravelportDebug] Summary keys: {list(summary.keys())[:10]}")
+                        if "CatalogProductOfferingsResponse" in json.dumps(result)[:1000]:
+                            print("[TravelportDebug] ✅ Travelport returned valid CatalogProductOfferingsResponse structure")
+                        else:
+                            snippet = json.dumps(result, indent=2)[:1200]
+                            print(f"[TravelportDebug] Response snippet:\n{snippet}")
                     else:
-                        snippet = json.dumps(result, indent=2)[:1200]
-                        print(f"[TravelportDebug] Response snippet:\n{snippet}")
+                        print(f"[TravelportDebug] Summary is not a dict: {type(summary)}")
             else:
                 print(f"[TravelportDebug] Unexpected Travelport result type for {origin}->{destination}: {type(result)}")
         except Exception as debug_e:

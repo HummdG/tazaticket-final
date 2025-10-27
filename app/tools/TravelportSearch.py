@@ -129,12 +129,37 @@ async def TravelportSearch(payload: dict, trip_type: str = "one-way"):
         except Exception as e:
             print("[TravelportDebug] ⚠️ Failed to print Travelport raw response:", e)
 
+        # Check if the response contains an error result
+        error_result = resp_enriched.get("CatalogProductOfferingsResponse", {}).get("Result", {}).get("Error")
+        if error_result:
+            # Extract the error message if available
+            error_message = "No specific error message"
+            if isinstance(error_result, list) and len(error_result) > 0:
+                error_message = error_result[0].get("Message", error_message)
+            elif isinstance(error_result, dict):
+                error_message = error_result.get("Message", error_message)
+            
+            return {
+                "ok": False,
+                "error": f"Travelport API returned an error: {error_message}",
+                "summary": None,
+                "raw": resp_enriched
+            }
 
         # Extract summary
         if trip_type == "one-way":
             summary = extract_cheapest_one_way_summary(resp_enriched)
         else:
             summary = extract_cheapest_round_trip_summary(resp_enriched)
+
+        # Handle case where no offerings are found
+        if not summary:
+            return {
+                "ok": False,
+                "error": "No flight options found for the given criteria",
+                "summary": None,
+                "raw": resp_enriched
+            }
 
         # Legacy price extraction
         try:
