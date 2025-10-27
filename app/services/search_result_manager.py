@@ -130,71 +130,130 @@ class SearchResultManager:
 
         try:
             response = search_data.get("raw_response", {})
-            catalog_offerings = response.get("CatalogProductOfferingsResponse", {}).get("CatalogProductOfferings", {})
-
-            if not catalog_offerings.get("CatalogProductOffering"):
-                return flight_options
-
-            offerings = catalog_offerings["CatalogProductOffering"]
+            
+            # Check for pre-resolved offerings first and prefer them
+            resolved_offers = response.get("ResolvedOfferings", [])
+            if resolved_offers:
+                offerings = resolved_offers  # prefer pre-resolved structure
+            else:
+                catalog_offerings = response.get("CatalogProductOfferingsResponse", {}).get("CatalogProductOfferings", {})
+                if not catalog_offerings.get("CatalogProductOffering"):
+                    return flight_options
+                offerings = catalog_offerings["CatalogProductOffering"]
 
             for offering in offerings:
                 try:
-                    # Extract flight details
-                    departure = offering.get("Departure", "")
-                    arrival = offering.get("Arrival", "")
-
-                    # Get product brand options
-                    product_options = offering.get("ProductBrandOptions", [])
-                    if not product_options:
-                        continue
-
-                    for option in product_options:
-                        brand_offerings = option.get("ProductBrandOffering", [])
-                        if not brand_offerings:
-                            continue
-
-                        for brand_offering in brand_offerings:
-                            # Extract price information
-                            price_detail = brand_offering.get("BestCombinablePrice", {})
-                            if not price_detail:
-                                continue
-
-                            total_price = price_detail.get("TotalPrice", 0)
-                            currency = price_detail.get("CurrencyCode", {}).get("value", "EUR")
-
-                            # Extract flight information
-                            flight_refs = option.get("flightRefs", [])
+                    # Check if this is a resolved offering (has already been processed by travelport_parser)
+                    if "ProductBrandOptions" in offering and len(offering["ProductBrandOptions"]) > 0 and "brand_name" in offering["ProductBrandOptions"][0]:
+                        # This is a resolved offering from travelport_parser
+                        for pbo_resolved in offering["ProductBrandOptions"]:
+                            # Extract flight details from resolved offering
+                            # For resolved offerings, we need to get departure/arrival from flight details
+                            flight_detail = pbo_resolved.get("flight_details", [{}])[0] if pbo_resolved.get("flight_details") else {}
+                            departure = flight_detail.get("FlightDetail", {}).get("Departure", {}).get("airport", "") if flight_detail else ""
+                            arrival = flight_detail.get("FlightDetail", {}).get("Arrival", {}).get("airport", "") if flight_detail else ""
+                            
+                            # Use data from resolved offering
+                            total_price = pbo_resolved.get("price", 0)
+                            currency = pbo_resolved.get("currency", "EUR")
+                            
+                            # Extract flight information from resolved flight details
+                            flight_refs = pbo_resolved.get("flightRefs", [])
                             if not flight_refs:
                                 continue
-
-                            # Get flight details from reference list
-                            flight_details = self._get_flight_details(response, flight_refs[0])
-
+                            
+                            # Use the first flight for basic details
+                            flight_detail = pbo_resolved.get("flight_details", [{}])[0] if pbo_resolved.get("flight_details") else {}
+                            
                             # Create flight option
                             flight_option = FlightOption(
                                 id=str(uuid.uuid4()),
                                 departure=departure,
                                 arrival=arrival,
-                                departure_time=flight_details.get("departure_time", ""),
-                                arrival_time=flight_details.get("arrival_time", ""),
-                                duration=flight_details.get("duration", ""),
-                                airline=flight_details.get("airline", ""),
-                                flight_number=flight_details.get("flight_number", ""),
-                                aircraft=flight_details.get("aircraft", ""),
-                                price=float(total_price),
+                                departure_time=flight_detail.get("Departure", {}).get("time", "") if flight_detail else "",
+                                arrival_time=flight_detail.get("Arrival", {}).get("time", "") if flight_detail else "",
+                                duration=flight_detail.get("duration", "") if flight_detail else "",
+                                airline=flight_detail.get("carrier", "") if flight_detail else "",
+                                flight_number=flight_detail.get("number", "") if flight_detail else "",
+                                aircraft=flight_detail.get("equipment", "") if flight_detail else "",
+                                price=float(total_price) if total_price else 0.0,
                                 currency=currency,
-                                cabin_class=self._extract_cabin_class(brand_offering),
+                                cabin_class=pbo_resolved.get("cabin_class", "Economy"),
                                 stops=self._calculate_stops(flight_refs),
-                                baggage_info=self._extract_baggage_info(response, brand_offering),
-                                penalties=self._extract_penalties(response, brand_offering),
+                                baggage_info=self._extract_baggage_info_from_resolved(pbo_resolved),
+                                penalties=self._extract_penalties_from_resolved(pbo_resolved),
                                 raw_data={
                                     "offering": offering,
-                                    "brand_offering": brand_offering,
+                                    "brand_offering": pbo_resolved,
                                     "flight_refs": flight_refs
                                 }
                             )
 
                             flight_options.append(flight_option)
+                    else:
+                        # This is the original offering structure
+                        # Extract flight details
+                        departure = offering.get("Departure", "")
+                        arrival = offering.get("Arrival", "")
+
+                        # Get product brand options
+                        product_options = offering.get("ProductBrandOptions", [])
+                        if not product_options:
+                            continue
+
+                        for option in product_options:
+                            brand_offerings = option.get("ProductBrandOffering", [])
+                            if not brand_offerings:
+                                continue
+
+                            for brand_offering in brand_offerings:
+                                # Extract price information
+                                price_detail = brand_offering.get("BestCombinablePrice", {})
+                                if not price_detail:
+                                    continue
+
+                                total_price = price_detail.get("TotalPrice", 0)
+                                currency = price_detail.get("CurrencyCode", {}).get("value", "EUR")
+
+                                # Extract flight information
+                                flight_refs = option.get("flightRefs", [])
+                                if not flight_refs:
+                                    continue
+
+                                # Get flight details from reference list - use the first flight's details for basic info
+                                flight_details = self._get_flight_details(response, flight_refs[0])
+
+                                # Get departure and arrival from the offering itself if not already set from the offering level
+                                offering_departure = offering.get("Departure", "")
+                                offering_arrival = offering.get("Arrival", "")
+                                departure = departure or offering_departure
+                                arrival = arrival or offering_arrival
+
+                                # Create flight option
+                                flight_option = FlightOption(
+                                    id=str(uuid.uuid4()),
+                                    departure=departure,
+                                    arrival=arrival,
+                                    departure_time=flight_details.get("departure_time", ""),
+                                    arrival_time=flight_details.get("arrival_time", ""),
+                                    duration=flight_details.get("duration", ""),
+                                    airline=flight_details.get("airline", ""),
+                                    flight_number=flight_details.get("flight_number", ""),
+                                    aircraft=flight_details.get("aircraft", ""),
+                                    price=float(total_price),
+                                    currency=currency,
+                                    cabin_class=self._extract_cabin_class(brand_offering),
+                                    stops=self._calculate_stops(flight_refs),
+                                    baggage_info=self._extract_baggage_info(response, brand_offering),
+                                    penalties=self._extract_penalties(response, brand_offering),
+                                    raw_data={
+                                        "offering": offering,
+                                        "brand_offering": brand_offering,
+                                        "flight_refs": flight_refs
+                                    }
+                                )
+
+                                flight_options.append(flight_option)
 
                 except Exception as e:
                     print(f"[SearchResultManager] Error parsing offering: {e}")
@@ -208,11 +267,14 @@ class SearchResultManager:
     def _get_flight_details(self, response: Dict[str, Any], flight_ref: str) -> Dict[str, str]:
         """Extract flight details from reference list"""
         try:
-            reference_list = response.get("ReferenceList", [])
+            # Look for ReferenceList at multiple possible locations
+            reference_list = (response.get("CatalogProductOfferingsResponse", {}).get("ReferenceList", []) or 
+                              response.get("ReferenceList", []))
             flights = None
 
             for ref_item in reference_list:
-                if ref_item.get("@type") == "ReferenceListFlight":
+                # Check both typed and untyped ReferenceList entries
+                if ref_item.get("@type") == "ReferenceListFlight" or "Flight" in ref_item:
                     flights = ref_item.get("Flight", [])
                     break
 
@@ -345,6 +407,28 @@ class SearchResultManager:
             print(f"[SearchResultManager] Error extracting penalties: {e}")
 
         return {"change": "Free", "cancel": "Free"}
+
+    def _extract_baggage_info_from_resolved(self, pbo_resolved: Dict[str, Any]) -> Dict[str, Any]:
+        """Extract baggage information from resolved product brand offering"""
+        # For now, using the default implementation until we have more specific resolved baggage data
+        # This can be enhanced later to extract more detailed baggage info from resolved data
+        return {
+            "carry_on_included": True,
+            "checked_bag_included": True,
+            "carry_on_text": "1 piece included",
+            "checked_bag_text": "Weight allowance applies"
+        }
+
+    def _extract_penalties_from_resolved(self, pbo_resolved: Dict[str, Any]) -> Dict[str, Any]:
+        """Extract penalty information from resolved product brand offering"""
+        # Extract penalty information if available in resolved data
+        # This can be enhanced as needed based on what's available in resolved output
+        terms = pbo_resolved.get("terms", "")
+        if "free" in terms.lower() or "no penalty" in terms.lower():
+            return {"change": "Free", "cancel": "Free"}
+        else:
+            # Default to "Free" unless more specific data is available
+            return {"change": "Free", "cancel": "Free"}
 
     async def get_search_result(self, search_id: str) -> Optional[SearchResult]:
         """Retrieve search result by ID"""

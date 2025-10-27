@@ -18,6 +18,12 @@ except ImportError:
         extract_cheapest_round_trip_summary
     )
 
+# Import the new travelport parser
+try:
+    from .travelport_parser import resolve_references
+except ImportError:
+    from travelport_parser import resolve_references
+
 # Done: create a shared httpx.AsyncClient for pooling
 _limits = httpx.Limits(max_connections=20, max_keepalive_connections=10)  # tune as needed
 _default_timeout = httpx.Timeout(10.0, read=30.0)  # adjust
@@ -114,21 +120,25 @@ async def TravelportSearch(payload: dict, trip_type: str = "one-way"):
     # Step 2: Call catalog
     try:
         resp_json = await fetch_catalog(CATALOG_URL, headers, payload)
+        
+        # Apply the reference resolver to enrich the response
+        resp_enriched = resolve_references(resp_json)
+        
         try:
-            print("[TravelportDebug] ✅ Travelport responded:", json.dumps(resp_json)[:800])
+            print("[TravelportDebug] ✅ Travelport responded:", json.dumps(resp_enriched)[:800])
         except Exception as e:
             print("[TravelportDebug] ⚠️ Failed to print Travelport raw response:", e)
 
 
         # Extract summary
         if trip_type == "one-way":
-            summary = extract_cheapest_one_way_summary(resp_json)
+            summary = extract_cheapest_one_way_summary(resp_enriched)
         else:
-            summary = extract_cheapest_round_trip_summary(resp_json)
+            summary = extract_cheapest_round_trip_summary(resp_enriched)
 
         # Legacy price extraction
         try:
-            cheapest_flight_price = resp_json["CatalogProductOfferingsResponse"]["CatalogProductOfferings"]["CatalogProductOffering"][0]["ProductBrandOptions"][0]["ProductBrandOffering"][0]["BestCombinablePrice"]["TotalPrice"]
+            cheapest_flight_price = resp_enriched["CatalogProductOfferingsResponse"]["CatalogProductOfferings"]["CatalogProductOffering"][0]["ProductBrandOptions"][0]["ProductBrandOffering"][0]["BestCombinablePrice"]["TotalPrice"]
         except (KeyError, IndexError):
             cheapest_flight_price = None
         
@@ -137,7 +147,7 @@ async def TravelportSearch(payload: dict, trip_type: str = "one-way"):
         return {
             "ok": True,
             "price": cheapest_flight_price,
-            "raw": resp_json,
+            "raw": resp_enriched,
             "summary": summary
         }
 
