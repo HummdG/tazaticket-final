@@ -18,7 +18,7 @@ from langchain_core.messages import ToolMessage, HumanMessage, AIMessage
 from ..tools.FlightSearchStateMachine import FlightSearchStateMachine, BulkFlightSearch
 from ..tools.SearchResultTool import SearchResultManager, StoreSearchResult
 from .memory_manager import memory_manager
-from prompt import PROMPT as system_prompt 
+from .prompt import PROMPT as system_prompt 
 
 # Global variable to store current thread_id for tools
 _current_thread_id = "default"
