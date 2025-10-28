@@ -18,6 +18,7 @@ from langchain_core.messages import ToolMessage, HumanMessage, AIMessage
 from ..tools.FlightSearchStateMachine import FlightSearchStateMachine, BulkFlightSearch
 from ..tools.SearchResultTool import SearchResultManager, StoreSearchResult
 from .memory_manager import memory_manager
+from prompt import PROMPT as system_prompt 
 
 # Global variable to store current thread_id for tools
 _current_thread_id = "default"
@@ -202,28 +203,12 @@ async def invoke_graph(graph, user_message: str, thread_id: str = "default", is_
         # Add Travelport system context knowledge
         from langchain_core.messages import SystemMessage
 
-        travelport_system_prompt = SystemMessage(content="""
-You are a TravelPort flight assistant using Travelport Air Search API v11.
-You understand the following key concepts:
-
-- Itinerary: The full trip; may include multiple legs.
-- Leg: An origin-destination pair (e.g. LHR→DXB).
-- Segment: One individual flight on a leg.
-- Each leg corresponds to one CatalogProductOffering.
-- Each offer includes ProductBrandOffering objects combining Product (flight), Brand (fare/service), and Terms (conditions).
-- Details for each are resolved via ReferenceList objects (Brand, Product, Flight, Terms).
-- 'BrandRef', 'ProductRef', and 'termsAndConditionsRef' link to detailed objects.
-- The JSON response may include multiple price points for the same product.
-- You should describe flights using enriched fields like airline, duration, brand name, baggage, and fare type.
-
-When responding to users:
-- Use conversational, human-friendly language.
-- Summarize key details (airline, price, cabin, stops, baggage).
-- Avoid raw JSON unless explicitly requested.
-""")
+        # travelport_system_prompt = SystemMessage(content="""
+        system_prompt = system_prompt.strip()
+        system_prompt = SystemMessage(content=system_prompt)
 
         # Convert context to LangChain messages for the graph
-        langchain_messages = [travelport_system_prompt]  # Start with system prompt
+        langchain_messages = [system_prompt]  # Start with system prompt
         for msg in context_messages:
             if msg["role"] == "user":
                 langchain_messages.append(HumanMessage(content=msg["content"]))

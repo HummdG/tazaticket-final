@@ -21,6 +21,7 @@ import asyncio
 import threading
 from langchain_core.messages import HumanMessage, AIMessage
 
+
 load_dotenv()
 # Configuration from environment
 CHAT_HISTORY_TABLE = os.getenv("CHAT_HISTORY_TABLE", "chat_history")

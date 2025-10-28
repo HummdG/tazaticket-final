@@ -4,7 +4,12 @@ Resolves Product, Brand, Flight, and TermsAndConditions references
 from CatalogProductOfferingsResponse.ReferenceList into a unified, human-readable structure.
 """
 
+
+
+
 from typing import Dict, Any, List, Optional
+
+
 
 def resolve_references(response: Dict[str, Any]) -> Dict[str, Any]:
     """
