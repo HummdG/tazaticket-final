@@ -17,6 +17,14 @@ from langchain_core.messages import ToolMessage, HumanMessage, AIMessage
 
 from ..tools.FlightSearchStateMachine import FlightSearchStateMachine, BulkFlightSearch
 from ..tools.SearchResultTool import SearchResultManager, StoreSearchResult
+from ..tools.TravelportReservation import (
+    TravelportAuthentication,
+    TravelportFlightSearch,
+    TravelportInitiateReservationWorkbench,
+    TravelportAddOfferToReservation,
+    TravelportAddTravelerToReservation,
+    TravelportCommitReservation
+)
 from .memory_manager import memory_manager
 from .prompt import PROMPT as system_prompt 
 
@@ -49,7 +57,7 @@ class BasicToolNode:
         for tool_call in message.tool_calls:
             # Pass thread_id, user_input_text, and voice mode to tools that need them
             tool_args = tool_call["args"]
-            if tool_call["name"] in ["FlightSearchStateMachine", "BulkFlightSearch"]:
+            if tool_call["name"] in ["FlightSearchStateMachine", "BulkFlightSearch"] or "Travelport" in tool_call["name"]:
                 # Try to get thread_id from config first, then fallback to global variable
                 config_thread_id = inputs.get("configurable", {}).get("thread_id")
                 global _current_thread_id
@@ -134,7 +142,18 @@ def create_graph():
         raise ValueError("OPENAI_API_KEY environment variable is not set")
     
     # Initialize tools
-    tools = [FlightSearchStateMachine, BulkFlightSearch, SearchResultManager, StoreSearchResult]
+    tools = [
+        FlightSearchStateMachine, 
+        BulkFlightSearch, 
+        SearchResultManager, 
+        StoreSearchResult,
+        TravelportAuthentication,
+        TravelportFlightSearch,
+        TravelportInitiateReservationWorkbench,
+        TravelportAddOfferToReservation,
+        TravelportAddTravelerToReservation,
+        TravelportCommitReservation
+    ]
     
     # Initialize LLM
     llm = init_chat_model("gpt-4o-mini", model_provider="openai", temperature=0)
