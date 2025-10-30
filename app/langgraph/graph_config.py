@@ -48,6 +48,9 @@ class BasicToolNode:
         self.tools_by_name = {tool.name: tool for tool in tools}
 
     async def __call__(self, inputs: dict):
+        # Extract thread_id from config for tracing
+        thread_id = inputs.get("configurable", {}).get("thread_id", "default")
+        
         if messages := inputs.get("messages", []):
             message = messages[-1]
         else:
@@ -55,6 +58,10 @@ class BasicToolNode:
         
         outputs = []
         for tool_call in message.tool_calls:
+            # Add detailed tracing for tool calls
+            print(f"[LangGraph-Trace] 🛠️  TOOL CALL: '{tool_call['name']}' | Thread: {thread_id} | ID: {tool_call['id']}")
+            print(f"[LangGraph-Trace]    Args: {tool_call['args']}")
+            
             # Pass thread_id, user_input_text, and voice mode to tools that need them
             tool_args = tool_call["args"]
             if tool_call["name"] in ["FlightSearchStateMachine", "BulkFlightSearch"] or "Travelport" in tool_call["name"]:
@@ -97,6 +104,9 @@ class BasicToolNode:
                 print(f"[BasicToolNode] Invoking tool '{tool_call['name']}' synchronously with args: {tool_args}")
                 tool_result = tool.invoke(tool_args)
             
+            print(f"[LangGraph-Trace] 📤 TOOL RESULT: '{tool_call['name']}' | Thread: {thread_id} | Success: {tool_result is not None}")
+            print(f"[LangGraph-Trace]    Result preview: {str(tool_result)[:200]}{'...' if len(str(tool_result)) > 200 else ''}")
+            
             outputs.append(
                 ToolMessage(
                     content=str(tool_result),
@@ -109,7 +119,32 @@ class BasicToolNode:
 
 async def chatbot(state: State, llm_with_tools):
     """Main chatbot node that processes user messages"""
-    return {"messages": [await llm_with_tools.ainvoke(state["messages"])]}
+    # Extract thread_id for tracing
+    thread_id = "unknown"
+    if state.get("messages"):
+        # Look for thread_id in the last message's metadata
+        last_msg = state["messages"][-1]
+        if hasattr(last_msg, 'additional_kwargs') and 'configurable' in last_msg.additional_kwargs:
+            thread_id = last_msg.additional_kwargs['configurable'].get('thread_id', 'unknown')
+    
+    print(f"[LangGraph-Trace] 🤖 CHATBOT: Processing messages | Thread: {thread_id} | Message count: {len(state['messages'])}")
+    
+    # Get the last human message for context
+    human_messages = [msg for msg in state["messages"] if hasattr(msg, 'type') and msg.type == 'human']
+    if human_messages:
+        last_user_message = human_messages[-1]
+        user_content = getattr(last_user_message, 'content', 'No content')[:100]  # First 100 chars
+        print(f"[LangGraph-Trace]    Last user input: '{user_content}...'")
+    
+    response = await llm_with_tools.ainvoke(state["messages"])
+    
+    # Check if the response contains tool calls
+    has_tool_calls = hasattr(response, 'tool_calls') and response.tool_calls
+    print(f"[LangGraph-Trace]    LLM Response | Has Tool Calls: {has_tool_calls}")
+    if has_tool_calls:
+        print(f"[LangGraph-Trace]    Tool Calls: {[call['name'] for call in response.tool_calls]}")
+    
+    return {"messages": [response]}
 
 
 def route_tools(state: State):
@@ -123,9 +158,25 @@ def route_tools(state: State):
         ai_message = messages[-1]
     else:
         raise ValueError("No messages in state", {state})
-    if hasattr(ai_message, "tool_calls") and len(ai_message.tool_calls) > 0:
+    
+    # Extract thread_id for tracing from the messages if available
+    thread_id = "unknown"
+    if hasattr(ai_message, 'additional_kwargs') and 'configurable' in ai_message.additional_kwargs:
+        thread_id = ai_message.additional_kwargs['configurable'].get('thread_id', 'unknown')
+    elif isinstance(state, dict) and 'messages' in state and state['messages']:
+        # Look for thread_id in the state configuration
+        # This requires checking the invoke configuration which may not be directly available here
+        pass
+    
+    # Log the decision being made
+    has_tool_calls = hasattr(ai_message, "tool_calls") and len(ai_message.tool_calls) > 0
+    print(f"[LangGraph-Trace] 💡 DECISION: Route Tools | Thread: {thread_id} | Has Tool Calls: {has_tool_calls}")
+    
+    if has_tool_calls:
+        print(f"[LangGraph-Trace]    Tool Calls: {[call['name'] for call in ai_message.tool_calls]}")
         return "tools"
     
+    print(f"[LangGraph-Trace]    No tool calls found, routing to END")
     return END
 
 
@@ -133,6 +184,8 @@ def create_graph():
     """
     Create and configure the LangGraph conversation flow
     """
+    print("[LangGraph-Trace] 🏗️  GRAPH CREATION: Initializing LangGraph")
+    
     # Load environment variables
     load_dotenv()
     
@@ -155,9 +208,13 @@ def create_graph():
         TravelportCommitReservation
     ]
     
+    print(f"[LangGraph-Trace]    Tools registered: {[tool.name for tool in tools]}")
+    
     # Initialize LLM
     llm = init_chat_model("gpt-4o-mini", model_provider="openai", temperature=0)
     llm_with_tools = llm.bind_tools(tools)
+    
+    print("[LangGraph-Trace]    LLM initialized and tools bound")
     
     # Create state graph
     graph_builder = StateGraph(State)
@@ -167,6 +224,7 @@ def create_graph():
         return await chatbot(state, llm_with_tools)
     
     # Add nodes
+    print("[LangGraph-Trace]    Adding nodes to graph")
     graph_builder.add_node("chatbot", chatbot_node)
     
     tool_node = BasicToolNode(tools=tools)
@@ -178,6 +236,7 @@ def create_graph():
 
     
     # Add edges
+    print("[LangGraph-Trace]    Adding edges to graph")
     graph_builder.add_conditional_edges(
         "chatbot",
         route_tools,
@@ -190,9 +249,10 @@ def create_graph():
     
     # Add memory checkpoint (InMemorySaver for LangGraph checkpointing)
     memory = InMemorySaver()
+    print("[LangGraph-Trace]    Compiling graph with memory checkpointer")
     graph = graph_builder.compile(checkpointer=memory)
     
-    print("[GraphConfig] LangGraph created with InMemorySaver checkpointer")
+    print("[LangGraph-Trace] ✅ GRAPH CREATED: LangGraph compiled with InMemorySaver checkpointer")
     
     return graph
 
@@ -204,18 +264,21 @@ async def invoke_graph(graph, user_message: str, thread_id: str = "default", is_
     """
     global _current_thread_id
     _current_thread_id = thread_id
-    print(f"[GraphConfig] Invoking graph for thread {thread_id} with message: '{user_message[:50]}...' (voice: {is_voice}, language: {detected_language})")
+    print(f"[LangGraph-Trace] ▶️  GRAPH INVOCATION: Starting | Thread: {thread_id} | Voice: {is_voice} | Lang: {detected_language}")
+    print(f"[LangGraph-Trace]    User message: '{user_message[:100]}{'...' if len(user_message) > 100 else ''}'")
     print(f"[GraphConfig] Set global thread_id to: {_current_thread_id}")
     
     # Initialize session and load context from DynamoDB
+    print(f"[LangGraph-Trace] 🔄 SESSION: Starting session for thread {thread_id}")
     await memory_manager.on_session_start(thread_id)
     
     # Add user message to memory manager (starts new pair)
-    print(f"[GraphConfig] About to add user message for thread {thread_id}")
+    print(f"[LangGraph-Trace] 📥 USER MESSAGE: Adding to memory | Thread: {thread_id}")
     await memory_manager.add_user_message(thread_id, user_message)
     
     try:
         # Get context for LLM (flattened pairs)
+        print(f"[LangGraph-Trace] 📚 CONTEXT: Retrieving context for LLM | Thread: {thread_id}")
         context_messages = await memory_manager.get_context_for_llm(thread_id)
         print(f"[GraphConfig] Using {len(context_messages)} context messages for LLM")
         
@@ -235,6 +298,7 @@ async def invoke_graph(graph, user_message: str, thread_id: str = "default", is_
                 langchain_messages.append(AIMessage(content=msg["content"]))
         
         print(f"[GraphConfig] Converted to {len(langchain_messages)} LangChain messages")
+        print(f"[LangGraph-Trace] 📝 MESSAGES: Prepared {len(langchain_messages)} messages for LLM")
         
         # Create configuration with voice mode and language information
         config = {
@@ -251,24 +315,32 @@ async def invoke_graph(graph, user_message: str, thread_id: str = "default", is_
         # Invoke the graph with the full context
         # Set a reasonable recursion limit to prevent infinite loops while allowing multiple tool calls
         config["recursion_limit"] = 50  # Increased to allow for multiple tool calls in sequence
+        print(f"[LangGraph-Trace] 🚀 EXECUTION: Invoking graph | Recursion limit: {config['recursion_limit']}")
         
         state = await graph.ainvoke(
             {"messages": langchain_messages},
             config,
         )
         
+        print(f"[LangGraph-Trace] ✅ EXECUTION: Graph invocation completed | Thread: {thread_id}")
+        
         # Extract assistant response and add to memory manager (closes pair)
         assistant_text = extract_last_ai_text(state)
         if assistant_text:
+            print(f"[LangGraph-Trace] 📤 RESPONSE: Processing assistant response | Length: {len(assistant_text)} chars")
             print(f"[GraphConfig] Adding assistant response to memory: '{assistant_text[:50]}...'")
             print(f"[GraphConfig] About to add assistant message for thread {thread_id}")
             await memory_manager.add_assistant_message(thread_id, assistant_text)
             print(f"[GraphConfig] Successfully added assistant response to memory for thread {thread_id}")
+            print(f"[LangGraph-Trace] 💾 MEMORY: Response stored in memory | Thread: {thread_id}")
         else:
             print("[GraphConfig] Warning: No assistant response extracted from state")
+            print(f"[LangGraph-Trace] ⚠️  RESPONSE: No assistant text extracted from state")
             
+        print(f"[LangGraph-Trace] 📋 COMPLETION: Graph invocation completed successfully | Thread: {thread_id}")
         return state
     except Exception as e:
+        print(f"[LangGraph-Trace] ❌ ERROR: Exception during graph invocation | Thread: {thread_id} | Error: {e}")
         print(f"[GraphConfig] Error during graph invocation: {e}")
         import traceback
         traceback.print_exc()
@@ -281,6 +353,7 @@ async def invoke_graph(graph, user_message: str, thread_id: str = "default", is_
             error_response = "Sorry, there was an error processing your request. Please try again."
             await memory_manager.add_assistant_message(thread_id, error_response)
             print(f"[GraphConfig] Successfully recovered by adding error response for thread {thread_id}")
+            print(f"[LangGraph-Trace] 💾 MEMORY: Error recovery response stored | Thread: {thread_id}")
         except ValueError as ve:
             # If there's no open pair, this is expected and we can ignore it
             if "No open pair to close" in str(ve):
