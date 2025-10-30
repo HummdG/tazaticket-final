@@ -8,6 +8,20 @@ import requests
 from datetime import datetime
 from langchain_core.tools import tool
 from typing import Optional, Dict, Any
+from dotenv import load_dotenv
+import httpx
+import asyncio
+
+# Global client for HTTP requests, same as in TravelportSearch
+_limits = httpx.Limits(max_connections=20, max_keepalive_connections=10)
+_default_timeout = httpx.Timeout(10.0, read=30.0)
+_shared_client = None
+
+def _get_shared_client() -> httpx.AsyncClient:
+    global _shared_client
+    if _shared_client is None or _shared_client.is_closed:
+        _shared_client = httpx.AsyncClient(limits=_limits, timeout=_default_timeout)
+    return _shared_client
 
 
 @tool("TravelportAuthentication")
@@ -95,6 +109,61 @@ async def TravelportAuthentication(
         return error_msg
 
 
+async def get_auth_token():
+    """
+    Internal helper function to get authentication token for use in other tools.
+    This follows the same authentication approach as TravelportSearch for consistency.
+    """
+    load_dotenv()  # Ensure we load environment variables
+    
+    CLIENT_ID = os.getenv("TRAVELPORT_CLIENT_ID")
+    CLIENT_SECRET = os.getenv("TRAVELPORT_CLIENT_SECRET")
+    USERNAME = os.getenv("TRAVELPORT_USERNAME")
+    PASSWORD = os.getenv("TRAVELPORT_PASSWORD")
+    OAUTH_URL = "https://oauth.pp.travelport.com/oauth/oauth20/token"
+    
+    # Validate required parameters
+    if not all([CLIENT_ID, CLIENT_SECRET, USERNAME, PASSWORD]):
+        missing_params = []
+        if not CLIENT_ID:
+            missing_params.append("TRAVELPORT_CLIENT_ID")
+        if not CLIENT_SECRET:
+            missing_params.append("TRAVELPORT_CLIENT_SECRET")
+        if not USERNAME:
+            missing_params.append("TRAVELPORT_USERNAME")
+        if not PASSWORD:
+            missing_params.append("TRAVELPORT_PASSWORD")
+        
+        raise ValueError(f"Missing required environment variables: {', '.join(missing_params)}")
+    
+    # Make async HTTP request using httpx like TravelportSearch does
+    data = {
+        "grant_type": "password",
+        "username": USERNAME,
+        "password": PASSWORD,
+        "client_id": CLIENT_ID,
+        "client_secret": CLIENT_SECRET,
+        "scope": "openid"
+    }
+    
+    # Use the same httpx client as TravelportSearch for consistency
+    client = _get_shared_client()
+    
+    try:
+        resp = await client.post(
+            OAUTH_URL,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            data=data
+        )
+        resp.raise_for_status()
+        body = resp.json()
+        return body["access_token"]
+    except httpx.HTTPError as e:
+        raise Exception(f"Failed to obtain OAuth token: {str(e)}")
+    except Exception as e:
+        raise Exception(f"Unexpected error during authentication: {str(e)}")
+
+
 @tool("TravelportFlightSearch")
 async def TravelportFlightSearch(
     origin: str,
@@ -124,12 +193,11 @@ async def TravelportFlightSearch(
     - max_upsells: Maximum number of upsells to return (default 4)
     """
     
-    # Get authentication token
-    token_result = await TravelportAuthentication()
-    if isinstance(token_result, dict) and token_result.get("status") == "success":
-        access_token = token_result["access_token"]
-    else:
-        return f"❌ Failed to authenticate: {token_result}"
+    try:
+        # Get authentication token using the same method as TravelportSearch
+        access_token = await get_auth_token()
+    except Exception as e:
+        return f"❌ Failed to authenticate: {str(e)}"
     
     # Prepare the search payload
     search_dict = {
@@ -184,7 +252,9 @@ async def TravelportFlightSearch(
     url = "https://api.pp.travelport.com/11/air/catalog/search/catalogproductofferings"
     
     try:
-        response = requests.post(url, headers=headers, data=json.dumps(search_dict))
+        # Use httpx client like TravelportSearch does
+        client = _get_shared_client()
+        response = await client.post(url, headers=headers, json=search_dict)
         response.raise_for_status()
         
         search_response = response.json()
@@ -215,7 +285,7 @@ async def TravelportFlightSearch(
         
         return result
         
-    except requests.exceptions.HTTPError as e:
+    except httpx.HTTPStatusError as e:
         error_msg = f"❌ HTTP error during flight search: {e.response.status_code} - {e.response.text}"
         return error_msg
     except Exception as e:
@@ -237,12 +307,11 @@ async def TravelportInitiateReservationWorkbench(
     that is used for all subsequent reservation operations.
     """
     
-    # Get authentication token
-    token_result = await TravelportAuthentication()
-    if isinstance(token_result, dict) and token_result.get("status") == "success":
-        access_token = token_result["access_token"]
-    else:
-        return f"❌ Failed to authenticate: {token_result}"
+    try:
+        # Get authentication token using the same method as TravelportSearch
+        access_token = await get_auth_token()
+    except Exception as e:
+        return f"❌ Failed to authenticate: {str(e)}"
     
     # Prepare the request
     url = "https://api.pp.travelport.com/11/air/book/session/reservationworkbench"
@@ -261,7 +330,9 @@ async def TravelportInitiateReservationWorkbench(
     }
     
     try:
-        response = requests.post(url, headers=headers, data=payload)
+        # Use httpx client like TravelportSearch does
+        client = _get_shared_client()
+        response = await client.post(url, headers=headers, json=json.loads(payload))
         response.raise_for_status()
         
         reservation_response = response.json()
@@ -276,7 +347,7 @@ async def TravelportInitiateReservationWorkbench(
             "message": f"✅ Successfully initiated reservation workbench with ID: {reservation_id}"
         }
         
-    except requests.exceptions.HTTPError as e:
+    except httpx.HTTPStatusError as e:
         error_msg = f"❌ HTTP error during reservation workbench initiation: {e.response.status_code} - {e.response.text}"
         return error_msg
     except Exception as e:
@@ -333,12 +404,11 @@ async def TravelportAddOfferToReservation(
     - passenger_type: Passenger type code (default 'ADT' for Adult)
     """
     
-    # Get authentication token
-    token_result = await TravelportAuthentication()
-    if isinstance(token_result, dict) and token_result.get("status") == "success":
-        access_token = token_result["access_token"]
-    else:
-        return f"❌ Failed to authenticate: {token_result}"
+    try:
+        # Get authentication token using the same method as TravelportSearch
+        access_token = await get_auth_token()
+    except Exception as e:
+        return f"❌ Failed to authenticate: {str(e)}"
     
     # Prepare the payload to add the offer to reservation
     payload_dict = {
@@ -378,8 +448,6 @@ async def TravelportAddOfferToReservation(
         }
     }
     
-    reserve_payload = json.dumps(payload_dict)
-    
     url = f"https://api.pp.travelport.com/11/air/book/airoffer/reservationworkbench/{reservation_id}/offers/buildfromproducts"
     
     headers = {
@@ -392,7 +460,9 @@ async def TravelportAddOfferToReservation(
     }
     
     try:
-        response = requests.post(url, headers=headers, data=reserve_payload)
+        # Use httpx client like TravelportSearch does
+        client = _get_shared_client()
+        response = await client.post(url, headers=headers, json=payload_dict)
         response.raise_for_status()
         
         offer_response = response.json()
@@ -407,7 +477,7 @@ async def TravelportAddOfferToReservation(
             "offer_ids": [offer_id.get("Identifier", {}).get("value") for offer_id in offer_ids]
         }
         
-    except requests.exceptions.HTTPError as e:
+    except httpx.HTTPStatusError as e:
         error_msg = f"❌ HTTP error during adding offer to reservation: {e.response.status_code} - {e.response.text}"
         return error_msg
     except Exception as e:
@@ -454,15 +524,14 @@ async def TravelportAddTravelerToReservation(
     - phone_role: Role of phone number (default 'Home')
     """
     
-    # Get authentication token
-    token_result = await TravelportAuthentication()
-    if isinstance(token_result, dict) and token_result.get("status") == "success":
-        access_token = token_result["access_token"]
-    else:
-        return f"❌ Failed to authenticate: {token_result}"
+    try:
+        # Get authentication token using the same method as TravelportSearch
+        access_token = await get_auth_token()
+    except Exception as e:
+        return f"❌ Failed to authenticate: {str(e)}"
     
     # Prepare the traveler payload
-    payload = json.dumps({
+    payload = {
         "@type": "Traveler",
         "gender": gender,
         "birthDate": birth_date,
@@ -504,7 +573,7 @@ async def TravelportAddTravelerToReservation(
                 }
             }
         ]
-    })
+    }
     
     url = f"https://api.pp.travelport.com/11/air/book/traveler/reservationworkbench/{reservation_id}/travelers"
     
@@ -517,7 +586,9 @@ async def TravelportAddTravelerToReservation(
     }
     
     try:
-        response = requests.post(url, headers=headers, data=payload)
+        # Use httpx client like TravelportSearch does
+        client = _get_shared_client()
+        response = await client.post(url, headers=headers, json=payload)
         response.raise_for_status()
         
         traveler_response = response.json()
@@ -532,7 +603,7 @@ async def TravelportAddTravelerToReservation(
             "message": f"✅ Successfully added traveler {first_name} {last_name} to reservation {reservation_id}"
         }
         
-    except requests.exceptions.HTTPError as e:
+    except httpx.HTTPStatusError as e:
         error_msg = f"❌ HTTP error during adding traveler to reservation: {e.response.status_code} - {e.response.text}"
         return error_msg
     except Exception as e:
@@ -558,18 +629,17 @@ async def TravelportCommitReservation(
     - reservation_id: The reservation workbench ID to commit
     """
     
-    # Get authentication token
-    token_result = await TravelportAuthentication()
-    if isinstance(token_result, dict) and token_result.get("status") == "success":
-        access_token = token_result["access_token"]
-    else:
-        return f"❌ Failed to authenticate: {token_result}"
+    try:
+        # Get authentication token using the same method as TravelportSearch
+        access_token = await get_auth_token()
+    except Exception as e:
+        return f"❌ Failed to authenticate: {str(e)}"
     
     url = f"https://api.pp.travelport.com/11/air/book/reservation/reservations/{reservation_id}"
     
-    payload = json.dumps({
+    payload = {
         "@type": "ReservationQueryCommitReservation"
-    })
+    }
     
     headers = {
         'Accept': 'application/json',
@@ -580,7 +650,9 @@ async def TravelportCommitReservation(
     }
     
     try:
-        response = requests.post(url, headers=headers, data=payload)
+        # Use httpx client like TravelportSearch does
+        client = _get_shared_client()
+        response = await client.post(url, headers=headers, json=payload)
         response.raise_for_status()
         
         commit_response = response.json()
@@ -622,7 +694,7 @@ async def TravelportCommitReservation(
         
         return result
         
-    except requests.exceptions.HTTPError as e:
+    except httpx.HTTPStatusError as e:
         error_msg = f"❌ HTTP error during reservation commit: {e.response.status_code} - {e.response.text}"
         return error_msg
     except Exception as e:
