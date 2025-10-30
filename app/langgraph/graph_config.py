@@ -203,12 +203,12 @@ async def invoke_graph(graph, user_message: str, thread_id: str = "default", is_
         # Add Travelport system context knowledge
         from langchain_core.messages import SystemMessage
 
-        # travelport_system_prompt = SystemMessage(content="""
-        system_prompt = system_prompt.strip()
-        system_prompt = SystemMessage(content=system_prompt)
+        # Use the imported system prompt from .prompt
+        processed_system_prompt = system_prompt.strip()
+        processed_system_prompt = SystemMessage(content=processed_system_prompt)
 
         # Convert context to LangChain messages for the graph
-        langchain_messages = [system_prompt]  # Start with system prompt
+        langchain_messages = [processed_system_prompt]  # Start with system prompt
         for msg in context_messages:
             if msg["role"] == "user":
                 langchain_messages.append(HumanMessage(content=msg["content"]))
