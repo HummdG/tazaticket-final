@@ -25,6 +25,7 @@ from ..tools.TravelportReservation import (
     TravelportAddTravelerToReservation,
     TravelportCommitReservation
 )
+
 from .memory_manager import memory_manager
 from .prompt import PROMPT as system_prompt 
 

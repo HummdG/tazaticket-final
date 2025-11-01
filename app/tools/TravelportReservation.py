@@ -700,3 +700,141 @@ async def TravelportCommitReservation(
     except Exception as e:
         error_msg = f"❌ Error during reservation commit: {str(e)}"
         return error_msg
+    
+
+@tool("TravelportFullReservation")
+async def TravelportFullReservation(
+    token: Optional[str] = None,
+    reserve_payload: Optional[dict] = None,
+    traveler_payload: Optional[dict] = None,
+    thread_id: str = "default",
+):
+    """
+    Perform full Travelport booking flow in one step:
+    1️⃣ Initiate reservation workbench
+    2️⃣ Add selected offer (build from products)
+    3️⃣ Add traveler information
+    4️⃣ Commit reservation and return PNR locator
+
+    Args:
+        token (str): OAuth access token (if not provided, auto-fetched)
+        reserve_payload (dict): Offer payload (from search results)
+        traveler_payload (dict): Traveler info payload
+        thread_id (str): conversation thread identifier
+
+    Returns:
+        dict: { status, reservation_id, locator, message, full_response }
+    """
+    load_dotenv()
+
+    # --- Step 0: Auth ---
+    try:
+        if not token:
+            token = await get_auth_token()
+    except Exception as e:
+        return {"status": "error", "message": f"❌ Auth failed: {e}"}
+
+    access_group = os.getenv("TRAVELPORT_ACCESS_GROUP")
+    client = _get_shared_client()
+
+    # --- Step 1: Create Workbench ---
+    try:
+        url_wb = "https://api.pp.travelport.com/11/air/book/session/reservationworkbench"
+        wb_headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "XAUTH_TRAVELPORT_ACCESSGROUP": access_group,
+            "Content-Version": "11",
+            "Authorization": f"Bearer {token}",
+        }
+        wb_payload = {"@type": "ReservationID", "ReservationID": {}}
+        resp_wb = await client.post(url_wb, headers=wb_headers, json=wb_payload)
+        resp_wb.raise_for_status()
+        reservation_id = (
+            resp_wb.json()
+            .get("ReservationResponse", {})
+            .get("Reservation", {})
+            .get("Identifier", {})
+            .get("value")
+        )
+        if not reservation_id:
+            return {"status": "error", "message": "❌ Failed to get reservation_id"}
+    except Exception as e:
+        return {"status": "error", "message": f"❌ Reservation init failed: {e}"}
+
+    # --- Step 2: Add Offer ---
+    try:
+        url_offer = f"https://api.pp.travelport.com/11/air/book/airoffer/reservationworkbench/{reservation_id}/offers/buildfromproducts"
+        offer_headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "trackingId": reservation_id,
+            "XAUTH_TRAVELPORT_ACCESSGROUP": access_group,
+            "Content-Version": "11",
+            "Authorization": f"Bearer {token}",
+        }
+        resp_offer = await client.post(url_offer, headers=offer_headers, json=reserve_payload)
+        resp_offer.raise_for_status()
+    except Exception as e:
+        return {
+            "status": "error",
+            "reservation_id": reservation_id,
+            "message": f"❌ Failed to add offer: {e}",
+        }
+
+    # --- Step 3: Add Traveler ---
+    try:
+        url_trav = f"https://api.pp.travelport.com/11/air/book/traveler/reservationworkbench/{reservation_id}/travelers"
+        trav_headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "XAUTH_TRAVELPORT_ACCESSGROUP": access_group,
+            "Content-Version": "11",
+            "Authorization": f"Bearer {token}",
+        }
+        resp_trav = await client.post(url_trav, headers=trav_headers, json=traveler_payload)
+        resp_trav.raise_for_status()
+    except Exception as e:
+        return {
+            "status": "error",
+            "reservation_id": reservation_id,
+            "message": f"❌ Failed to add traveler: {e}",
+        }
+
+    # --- Step 4: Commit Reservation ---
+    try:
+        url_commit = f"https://api.pp.travelport.com/11/air/book/reservation/reservations/{reservation_id}"
+        commit_headers = {
+            "Accept": "application/json",
+            "XAUTH_TRAVELPORT_ACCESSGROUP": access_group,
+            "Content-Version": "11",
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {token}",
+        }
+        commit_payload = {"@type": "ReservationQueryCommitReservation"}
+        resp_commit = await client.post(url_commit, headers=commit_headers, json=commit_payload)
+        resp_commit.raise_for_status()
+        data_commit = resp_commit.json()
+        locator = (
+            data_commit.get("ReservationResponse", {})
+            .get("Receipt", {})
+            .get("Confirmation", {})
+            .get("Locator", {})
+            .get("value", "")
+        )
+        # Save locally for debug
+        with open("final_reservation_response.json", "w") as f:
+            json.dump(data_commit, f, indent=2)
+        return {
+            "status": "success",
+            "reservation_id": reservation_id,
+            "locator": locator,
+            "message": f"✅ Reservation committed successfully. Locator (PNR): {locator}",
+            "full_response": data_commit,
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "reservation_id": reservation_id,
+            "message": f"❌ Failed to commit reservation: {e}",
+        }
