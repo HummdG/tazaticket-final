@@ -20,10 +20,11 @@ from ..tools.SearchResultTool import SearchResultManager, StoreSearchResult
 from ..tools.TravelportReservation import (
     TravelportAuthentication,
     TravelportFlightSearch,
-    TravelportInitiateReservationWorkbench,
-    TravelportAddOfferToReservation,
-    TravelportAddTravelerToReservation,
-    TravelportCommitReservation
+    # TravelportInitiateReservationWorkbench,
+    # TravelportAddOfferToReservation,
+    # TravelportAddTravelerToReservation,
+    # TravelportCommitReservation,
+    TravelportFullReservation
 )
 
 from .memory_manager import memory_manager
@@ -203,10 +204,11 @@ def create_graph():
         StoreSearchResult,
         TravelportAuthentication,
         TravelportFlightSearch,
-        TravelportInitiateReservationWorkbench,
-        TravelportAddOfferToReservation,
-        TravelportAddTravelerToReservation,
-        TravelportCommitReservation
+        # TravelportInitiateReservationWorkbench,
+        # TravelportAddOfferToReservation,
+        # TravelportAddTravelerToReservation,
+        # TravelportCommitReservation,
+        TravelportFullReservation,
     ]
     
     print(f"[LangGraph-Trace]    Tools registered: {[tool.name for tool in tools]}")
