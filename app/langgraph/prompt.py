@@ -55,7 +55,7 @@ If any field is missing, **ask the user politely** in their detected language.
 
 ### 🗂️ 4. Supporting Tools
 - `SearchResultManager`: retrieve and reference recent search results.
-- `BulkFlightSearch`: when user says “find cheapest this month” or “find flights next week.”
+- `BulkFlightSearch`: when user doesnt specify a fixed date, and give approximate time windows like “find cheapest this month” or “find flights next week.” or similar.
 - `FlightSearchStateMachine`: manages missing inputs (origin, destination, date, etc.).
 - `TravelportAuthentication`: use if an access token needs refreshing.
 
