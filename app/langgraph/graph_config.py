@@ -26,9 +26,11 @@ from ..tools.TravelportReservation import (
     # TravelportCommitReservation,
     TravelportFullReservation
 )
+from ..tools.UnifiedTravelportBooking import unified_travelport_booking
 
 from .memory_manager import memory_manager
 from .prompt import PROMPT as system_prompt 
+from ..services.TravelportDataAdapter import TravelportDataAdapter
 
 # Global variable to store current thread_id for tools
 _current_thread_id = "default"
@@ -209,6 +211,7 @@ def create_graph():
         # TravelportAddTravelerToReservation,
         # TravelportCommitReservation,
         TravelportFullReservation,
+        unified_travelport_booking,
     ]
     
     print(f"[LangGraph-Trace]    Tools registered: {[tool.name for tool in tools]}")

@@ -65,12 +65,26 @@ class SearchResult:
         }
 
 
+import boto3
+from botocore.exceptions import ClientError
+
+
 class SearchResultManager:
     """Manages search results with Redis storage and retrieval"""
 
     def __init__(self):
         self.redis_conn = None
         self.result_ttl = 3600 * 24  # 24 hours
+        self.max_cache = 10  # Maximum number of searches to keep in Redis per user
+        self.dynamo_table = None  # Will be initialized when needed
+
+    def _get_dynamo_table(self):
+        """Initialize and return DynamoDB table resource"""
+        if self.dynamo_table is None:
+            # Initialize DynamoDB resource - using environment variables for credentials
+            dynamodb = boto3.resource('dynamodb')
+            self.dynamo_table = dynamodb.Table('TravelportSearchResults')  # Replace with your actual table name
+        return self.dynamo_table
 
     async def get_connection(self):
         """Get Redis connection"""
@@ -105,6 +119,7 @@ class SearchResultManager:
         redis_conn = await self.get_connection()
         result_key = f"search_result:{search_id}"
         user_search_key = f"user_searches:{wa_id}"
+        user_search_list_key = f"user_search_list:{wa_id}"
 
         # Store search result
         await redis_conn.setex(
@@ -114,8 +129,23 @@ class SearchResultManager:
         )
 
         # Add to user's search history
-        await redis_conn.sadd(user_search_key, search_id)
-        await redis_conn.expire(user_search_key, self.result_ttl)
+        await redis_conn.lpush(user_search_list_key, result_key)
+        
+        # If list length > self.max_cache:
+        if await redis_conn.llen(user_search_list_key) > self.max_cache:
+            old_key = await redis_conn.rpop(user_search_list_key)
+            if old_key:
+                old_data = await redis_conn.get(old_key)
+                if old_data:
+                    # push to DynamoDB
+                    try:
+                        dynamo_table = self._get_dynamo_table()
+                        dynamo_table.put_item(Item=json.loads(old_data))
+                        await redis_conn.delete(old_key)
+                    except ClientError as e:
+                        print(f"[SearchResultManager] Failed to store in DynamoDB: {e}")
+                        # Restore the key to the list if DynamoDB storage fails
+                        await redis_conn.lpush(user_search_list_key, old_key)
 
         # Store latest search for thread
         thread_search_key = f"thread_latest_search:{thread_id}"
@@ -520,6 +550,85 @@ class SearchResultManager:
         response += f"\n💡 Showing top {len(sorted_options)} cheapest options. Use the option number to get more details!"
 
         return response
+
+    async def get_latest_for_user(self, wa_id: str) -> Optional[SearchResult]:
+        """Get the latest search result for a user"""
+        try:
+            redis_conn = await self.get_connection()
+            # Get all search IDs for the user
+            user_search_list_key = f"user_search_list:{wa_id}"
+            search_keys = await redis_conn.lrange(user_search_list_key, 0, -1)
+            
+            if not search_keys:
+                return None
+                
+            # Get the most recent search result
+            latest_key = search_keys[0].decode() if isinstance(search_keys[0], bytes) else search_keys[0]
+            result_data = await redis_conn.get(latest_key)
+            
+            if not result_data:
+                return None
+
+            data = json.loads(result_data)
+
+            # Convert flight options back to objects
+            flight_options = [
+                FlightOption(**option_data)
+                for option_data in data.get("flight_options", [])
+            ]
+
+            return SearchResult(
+                search_id=data["search_id"],
+                wa_id=data["wa_id"],
+                thread_id=data["thread_id"],
+                origin=data["origin"],
+                destination=data["destination"],
+                search_date=data["search_date"],
+                trip_type=data["trip_type"],
+                passengers=data["passengers"],
+                flight_options=flight_options,
+                search_timestamp=data["search_timestamp"],
+                expires_at=data["expires_at"]
+            )
+
+        except Exception as e:
+            print(f"[SearchResultManager] Error retrieving latest search result for user {wa_id}: {e}")
+            return None
+
+    def get_offer_by_id(self, search_result: SearchResult, offer_id: str):
+        """
+        Get a specific offer by ID from a search result.
+        This method looks through the raw data to find the specific offer by ID.
+        """
+        # Go through the flight options to find one with the matching raw data
+        for option in search_result.flight_options:
+            raw_data = option.raw_data
+            # Check if this matches the offer ID we're looking for
+            
+            # The offer ID could be in different locations depending on the response structure
+            # Look in the offering's ID first
+            offering = raw_data.get("offering", {})
+            if offering.get("id") == offer_id:
+                return offering
+            
+            # If not found, look in the brand offering
+            brand_offering = raw_data.get("brand_offering", {})
+            # The offer ID may be an internal ID, so we might need to match differently
+            # Look through the resolved offerings in the raw response
+            raw_response = raw_data.get("raw_response", {})
+            resolved_offerings = raw_response.get("ResolvedOfferings", [])
+            
+            for resolved_offering in resolved_offerings:
+                if resolved_offering.get("id") == offer_id:
+                    # Look for the specific ProductBrandOption with our ID
+                    for pbo in resolved_offering.get("ProductBrandOptions", []):
+                        # Compare based on other unique identifiers if the ID doesn't match directly
+                        # Since the ID in the UI may be different from the internal ID, 
+                        # we'll return the first matching PBO or a full offering containing it
+                        pass  # We'll implement specific matching logic as needed
+    
+        # For now, return None - in a real implementation, we'd need to map UI option IDs to internal IDs
+        return None
 
 
 # Global instance
