@@ -15,9 +15,9 @@ from langgraph.graph.message import add_messages
 from langgraph.checkpoint.memory import InMemorySaver
 from langchain_core.messages import ToolMessage, HumanMessage, AIMessage
 
-from ..tools.FlightSearchStateMachine import FlightSearchStateMachine, BulkFlightSearch
-from ..tools.SearchResultTool import SearchResultManager, StoreSearchResult
-from ..tools.TravelportReservation import (
+from app.tools.FlightSearchStateMachine import FlightSearchStateMachine, BulkFlightSearch
+from app.tools.SearchResultTool import SearchResultManager, StoreSearchResult
+from app.tools.TravelportReservation import (
     TravelportAuthentication,
     TravelportFlightSearch,
     # TravelportInitiateReservationWorkbench,
@@ -26,11 +26,11 @@ from ..tools.TravelportReservation import (
     # TravelportCommitReservation,
     TravelportFullReservation
 )
-from ..tools.UnifiedTravelportBooking import unified_travelport_booking
+from app.tools.UnifiedTravelportBooking import unified_travelport_booking
 
-from .memory_manager import memory_manager
-from .prompt import PROMPT as system_prompt 
-from ..services.TravelportDataAdapter import TravelportDataAdapter
+from app.langgraph.memory_manager import memory_manager
+from app.langgraph.prompt import PROMPT as system_prompt 
+from app.services.TravelportDataAdapter import TravelportDataAdapter
 
 # Global variable to store current thread_id for tools
 _current_thread_id = "default"

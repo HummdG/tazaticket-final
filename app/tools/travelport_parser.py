@@ -4,11 +4,36 @@ Resolves Product, Brand, Flight, and TermsAndConditions references
 from CatalogProductOfferingsResponse.ReferenceList into a unified, human-readable structure.
 """
 
-
-
-
+import datetime
 from typing import Dict, Any, List, Optional
 
+
+def _calc_duration(start: str, end: str) -> str:
+    """
+    Calculate duration between two ISO format datetime strings and return in human-readable format.
+    Example: "2023-05-15T08:30:00" to "2023-05-15T10:45:00" -> "2h 15m"
+    """
+    try:
+        if not start or not end:
+            return "Unknown"
+        
+        start_dt = datetime.datetime.fromisoformat(start.replace("Z", "+00:00"))
+        end_dt = datetime.datetime.fromisoformat(end.replace("Z", "+00:00"))
+        duration = end_dt - start_dt
+        
+        total_seconds = int(duration.total_seconds())
+        hours = total_seconds // 3600
+        minutes = (total_seconds % 3600) // 60
+        
+        if hours > 0 and minutes > 0:
+            return f"{hours}h {minutes}m"
+        elif hours > 0:
+            return f"{hours}h"
+        else:
+            return f"{minutes}m"
+    except Exception as e:
+        print(f"[TravelportParser] Error calculating duration: {e}")
+        return "Unknown"
 
 
 def resolve_references(response: Dict[str, Any]) -> Dict[str, Any]:
@@ -112,6 +137,86 @@ def resolve_references(response: Dict[str, Any]) -> Dict[str, Any]:
                     }
 
                     offer_data["ProductBrandOptions"].append(pbo_resolved)
+            
+            # Add itinerary summaries to each ProductBrandOption
+            for pbo in offer_data.get("ProductBrandOptions", []):
+                # collect all flight refs
+                flight_refs = pbo.get("flightRefs", [])
+                segs = [index["Flight"].get(fid, {}) for fid in flight_refs]
+                
+                # Process segments to extract proper departure/arrival info
+                processed_segs = []
+                for seg in segs:
+                    # Extract departure and arrival info from nested structure
+                    departure_detail = seg.get("Departure", {})
+                    arrival_detail = seg.get("Arrival", {})
+                    
+                    # Create a new segment with proper field mappings
+                    processed_seg = {
+                        # Flight details
+                        "id": seg.get("id"),
+                        "carrier": seg.get("carrier"),
+                        "number": seg.get("number"),
+                        "equipment": seg.get("equipment"),
+                        "distance": seg.get("distance"),
+                        "duration": seg.get("duration"),  # ISO 8601 duration format
+                        "AvailabilitySourceCode": seg.get("AvailabilitySourceCode"),
+                        "contentSource": seg.get("ContentSource"),
+                        
+                        # Departure details
+                        "departureAirport": departure_detail.get("location"),
+                        "departureTime": departure_detail.get("time"),
+                        "departureDate": departure_detail.get("date"),
+                        "departureTerminal": departure_detail.get("terminal"),
+                        
+                        # Arrival details
+                        "arrivalAirport": arrival_detail.get("location"),
+                        "arrivalTime": arrival_detail.get("time"),
+                        "arrivalDate": arrival_detail.get("date"),
+                        "arrivalTerminal": arrival_detail.get("terminal"),
+                        
+                        # For duration calculations (convert ISO format to datetime if needed)
+                        "departureDateTime": f"{departure_detail.get('date')}T{departure_detail.get('time')}" if departure_detail.get('date') and departure_detail.get('time') else None,
+                        "arrivalDateTime": f"{arrival_detail.get('date')}T{arrival_detail.get('time')}" if arrival_detail.get('date') and arrival_detail.get('time') else None,
+                        
+                        # Segment sequence (if available in the flight object itself)
+                        "segmentSequence": seg.get("segmentSequence", 0)
+                    }
+                    processed_segs.append(processed_seg)
+                
+                # sort segments by segmentSequence if present
+                segs_sorted = sorted(processed_segs, key=lambda s: s.get("segmentSequence", 0))
+                
+                # build layover info
+                layovers = []
+                for i in range(len(segs_sorted)-1):
+                    arr_time = segs_sorted[i].get("arrivalDateTime")
+                    dep_time = segs_sorted[i+1].get("departureDateTime")
+                    if arr_time and dep_time:
+                        layovers.append({
+                            "fromAirport": segs_sorted[i].get("arrivalAirport"),
+                            "toAirport": segs_sorted[i+1].get("departureAirport"),
+                            "duration": _calc_duration(arr_time, dep_time)
+                        })
+                
+                # compute total duration
+                if segs_sorted:
+                    first_seg = segs_sorted[0]
+                    last_seg = segs_sorted[-1]
+                    first_dep_time = first_seg.get("departureDateTime")
+                    last_arr_time = last_seg.get("arrivalDateTime")
+                    total_duration = _calc_duration(first_dep_time, last_arr_time) if first_dep_time and last_arr_time else None
+                else:
+                    total_duration = None
+                
+                # attach itinerary summary
+                pbo["itinerary_summary"] = {
+                    "segments": segs_sorted,
+                    "layovers": layovers,
+                    "total_duration": total_duration,
+                    "num_stops": len(layovers)
+                }
+            
             enriched_offerings.append(offer_data)
 
         response["ResolvedOfferings"] = enriched_offerings
