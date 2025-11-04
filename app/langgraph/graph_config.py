@@ -24,7 +24,7 @@ from app.tools.TravelportReservation import (
     # TravelportAddOfferToReservation,
     # TravelportAddTravelerToReservation,
     # TravelportCommitReservation,
-    TravelportFullReservation
+    # TravelportFullReservation  # Commented out as per instructions
 )
 from app.tools.UnifiedTravelportBooking import unified_travelport_booking
 
@@ -210,7 +210,7 @@ def create_graph():
         # TravelportAddOfferToReservation,
         # TravelportAddTravelerToReservation,
         # TravelportCommitReservation,
-        TravelportFullReservation,
+        # TravelportFullReservation,
         unified_travelport_booking,
     ]
     

@@ -1,3 +1,4 @@
+from typing import Union, List, Dict, Any
 from langchain.tools import tool
 from ..payloads.BuildFromProductsPayload import build_from_products_payload
 from ..services.search_result_manager import search_result_manager
@@ -10,10 +11,24 @@ from .TravelportReservation import (
 
 
 @tool("UnifiedTravelportBooking")
-async def unified_travelport_booking(wa_id: str, selected_option_id: str, traveler_details: dict):
+async def unified_travelport_booking(wa_id: str, selected_option_id: str, traveler_details: Union[Dict[str, Any], List[Dict[str, Any]]]):
     """
     Handle full workflow: initiate reservation → add offer → add traveler(s) → commit reservation (PNR).
     """
+    # Normalize input: if a list is passed (as in your case), use it as the traveler list
+    # If a single dict is passed, wrap it in a list for consistent processing
+    if isinstance(traveler_details, list):
+        traveler_list = traveler_details
+        passenger_count = len(traveler_details)
+    else:
+        # Single traveler dict - put it in a list for consistent processing
+        traveler_list = [traveler_details]
+        passenger_count = 1
+    
+    # Validate we have at least one traveler
+    if not traveler_list or len(traveler_list) == 0:
+        return {"status": "error", "message": "No traveler details provided"}
+    
     # 1. fetch search result using wa_id
     search = await search_result_manager.get_latest_for_user(wa_id)
     if not search:
@@ -117,15 +132,11 @@ async def unified_travelport_booking(wa_id: str, selected_option_id: str, travel
         return {"status": "error", "message": f"Failed to add offer: {add_offer_resp}"}
     
     # 5. Add travelers
-    # Handle both single traveler (dict) and multiple travelers (list)
-    if isinstance(traveler_details, list) and len(traveler_details) > 0:
-        # If it's a list, process the first traveler
-        first_traveler = traveler_details[0]
-    elif isinstance(traveler_details, dict):
-        # If it's a single traveler dict, use directly
-        first_traveler = traveler_details
-    else:
-        return {"status": "error", "message": "Invalid traveler details format"}
+    # Use the first traveler from the normalized traveler_list
+    if not traveler_list or len(traveler_list) == 0:
+        return {"status": "error", "message": "No traveler details to add"}
+    
+    first_traveler = traveler_list[0]
     if isinstance(first_traveler, dict):
         add_trav_resp = await TravelportAddTravelerToReservation(
             reservation_id=reservation_id,
