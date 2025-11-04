@@ -53,10 +53,10 @@ class BasicToolNode:
 
     async def __call__(self, inputs: dict):
         # Extract thread_id and wa_id from config for tracing
-        # --- FIX: Preserve true WhatsApp thread_id and wa_id ---
-        configurable = inputs.get("configurable", {}) or {}
+        # --- FIX: Properly extract and inject wa_id + thread_id ---
+        configurable = inputs.get("configurable") or {}
         thread_id = configurable.get("thread_id") or configurable.get("wa_id") or "unknown"
-        wa_id = configurable.get("wa_id", thread_id)
+        wa_id = configurable.get("wa_id") or thread_id
         
         if messages := inputs.get("messages", []):
             message = messages[-1]
@@ -69,11 +69,14 @@ class BasicToolNode:
             print(f"[LangGraph-Trace] 🛠️  TOOL CALL: '{tool_call['name']}' | Thread: {thread_id} | ID: {tool_call['id']}")
             print(f"[LangGraph-Trace]    Args: {tool_call['args']}")
             
-            # Pass thread_id, user_input_text, and voice mode to tools that need them
-            tool_args = tool_call["args"]
-            # 🧩 Inject wa_id and thread_id into every tool automatically (our fix)
-            tool_args.setdefault("thread_id", thread_id)
-            tool_args.setdefault("wa_id", wa_id)
+            # Store original args to preserve any existing values
+            tool_args = tool_call["args"].copy()  # Make a copy to avoid modifying original
+            
+            # Inject IDs into every tool call automatically
+            tool_args["thread_id"] = thread_id
+            tool_args["wa_id"] = wa_id
+
+            print(f"[BasicToolNode] 🧩 Using wa_id={wa_id}, thread_id={thread_id}")
             
             # Set mode of conversation based on voice detection
             is_voice_mode = inputs.get("configurable", {}).get("is_voice_mode", False)
