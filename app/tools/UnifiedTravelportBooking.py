@@ -62,8 +62,16 @@ async def unified_travelport_booking(wa_id: str, selected_option_id: str, travel
         return {"status": "error", "message": "Itinerary summary not found in selected option"}
     
     # 2. build payload using the brand_offering which contains itinerary_summary
+    # Handle case where traveler_details might be a list or single dict
+    if isinstance(traveler_details, list):
+        # If it's a list of travelers, use the count directly
+        passenger_count = len(traveler_details)
+    else:
+        # If it's a single traveler dict, there's just 1 passenger
+        passenger_count = 1
+    
     payload = build_from_products_payload(brand_offering,
-                                          passengers=len(traveler_details),
+                                          passengers=passenger_count,
                                           passenger_type="ADT")  # adjust mapping
     
     # 3. Initiate reservation
@@ -101,7 +109,7 @@ async def unified_travelport_booking(wa_id: str, selected_option_id: str, travel
         brand_tier=brand_offering.get("brandTier", 1),  # This might not exist in all cases
         availability_source_code=first_segment.get("availabilitySourceCode", ""),
         content_source=first_segment.get("contentSource", ""),
-        num_passengers=len(traveler_details),
+        num_passengers=passenger_count,  # Using calculated passenger count
         passenger_type="ADT"
     )
     
@@ -109,8 +117,15 @@ async def unified_travelport_booking(wa_id: str, selected_option_id: str, travel
         return {"status": "error", "message": f"Failed to add offer: {add_offer_resp}"}
     
     # 5. Add travelers
-    # Assuming traveler_details is a list of travelers, we'll process the first one for now
-    first_traveler = traveler_details[0] if isinstance(traveler_details, list) and traveler_details else traveler_details
+    # Handle both single traveler (dict) and multiple travelers (list)
+    if isinstance(traveler_details, list) and len(traveler_details) > 0:
+        # If it's a list, process the first traveler
+        first_traveler = traveler_details[0]
+    elif isinstance(traveler_details, dict):
+        # If it's a single traveler dict, use directly
+        first_traveler = traveler_details
+    else:
+        return {"status": "error", "message": "Invalid traveler details format"}
     if isinstance(first_traveler, dict):
         add_trav_resp = await TravelportAddTravelerToReservation(
             reservation_id=reservation_id,
