@@ -31,9 +31,13 @@ async def unified_travelport_booking(wa_id: str, selected_option_id: str, travel
     
     # 1. fetch search result using wa_id
     search = await search_result_manager.get_latest_for_user(wa_id)
+    # if not search:    
+        # return {"status": "error", "message": f"No search results found for user {wa_id}"}
     if not search:
-        return {"status": "error", "message": f"No search results found for user {wa_id}"}
-    
+        return {
+            "status": "error",
+            "message": f"No recent flight search found. Please run a new search before booking."
+        }    
     # Find the selected option among the flight options
     selected_flight_option = None
     for option in search.flight_options:

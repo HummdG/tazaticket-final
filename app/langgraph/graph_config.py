@@ -52,8 +52,11 @@ class BasicToolNode:
         self.tools_by_name = {tool.name: tool for tool in tools}
 
     async def __call__(self, inputs: dict):
-        # Extract thread_id from config for tracing
-        thread_id = inputs.get("configurable", {}).get("thread_id", "default")
+        # Extract thread_id and wa_id from config for tracing
+        # --- FIX: Preserve true WhatsApp thread_id and wa_id ---
+        configurable = inputs.get("configurable", {}) or {}
+        thread_id = configurable.get("thread_id") or configurable.get("wa_id") or "unknown"
+        wa_id = configurable.get("wa_id", thread_id)
         
         if messages := inputs.get("messages", []):
             message = messages[-1]
@@ -68,34 +71,28 @@ class BasicToolNode:
             
             # Pass thread_id, user_input_text, and voice mode to tools that need them
             tool_args = tool_call["args"]
-            if tool_call["name"] in ["FlightSearchStateMachine", "BulkFlightSearch"] or "Travelport" in tool_call["name"]:
-                # Try to get thread_id from config first, then fallback to global variable
-                config_thread_id = inputs.get("configurable", {}).get("thread_id")
-                global _current_thread_id
-                extracted_thread_id = config_thread_id if config_thread_id else _current_thread_id
-                existing_thread_id = tool_args.get("thread_id", "not_set")
-                tool_args["thread_id"] = extracted_thread_id
-                print(f"[BasicToolNode] Setting thread_id for {tool_call['name']}: {extracted_thread_id} (was: {existing_thread_id})")
-                print(f"[BasicToolNode] Source: {'config' if config_thread_id else 'global'}, Config: {inputs.get('configurable', {})}")
-                
-                # Set mode of conversation based on voice detection
-                is_voice_mode = inputs.get("configurable", {}).get("is_voice_mode", False)
-                if "mode_of_conversation" not in tool_args:
-                    tool_args["mode_of_conversation"] = "voice" if is_voice_mode else "text"
-                    print(f"[BasicToolNode] Setting mode_of_conversation: {tool_args['mode_of_conversation']}")
-                
-                # Set detected language
-                detected_language = inputs.get("configurable", {}).get("detected_language", "en")
-                if "detected_language" not in tool_args:
-                    tool_args["detected_language"] = detected_language
-                    print(f"[BasicToolNode] Setting detected_language: {detected_language}")
-                
-                if tool_call["name"] in ["FlightSearchStateMachine", "BulkFlightSearch"]:
-                    if "user_input_text" not in tool_args or not tool_args["user_input_text"]:
-                        # Find the original user message for carrier parsing
-                        user_messages = [msg for msg in inputs.get("messages", []) if hasattr(msg, "type") and msg.type == "human"]
-                        if user_messages:
-                            tool_args["user_input_text"] = user_messages[-1].content
+            # 🧩 Inject wa_id and thread_id into every tool automatically (our fix)
+            tool_args.setdefault("thread_id", thread_id)
+            tool_args.setdefault("wa_id", wa_id)
+            
+            # Set mode of conversation based on voice detection
+            is_voice_mode = inputs.get("configurable", {}).get("is_voice_mode", False)
+            if "mode_of_conversation" not in tool_args:
+                tool_args["mode_of_conversation"] = "voice" if is_voice_mode else "text"
+                print(f"[BasicToolNode] Setting mode_of_conversation: {tool_args['mode_of_conversation']}")
+            
+            # Set detected language
+            detected_language = inputs.get("configurable", {}).get("detected_language", "en")
+            if "detected_language" not in tool_args:
+                tool_args["detected_language"] = detected_language
+                print(f"[BasicToolNode] Setting detected_language: {detected_language}")
+            
+            if tool_call["name"] in ["FlightSearchStateMachine", "BulkFlightSearch"]:
+                if "user_input_text" not in tool_args or not tool_args["user_input_text"]:
+                    # Find the original user message for carrier parsing
+                    user_messages = [msg for msg in inputs.get("messages", []) if hasattr(msg, "type") and msg.type == "human"]
+                    if user_messages:
+                        tool_args["user_input_text"] = user_messages[-1].content
             
             # Use async invocation for StructuredTool instances
             tool = self.tools_by_name[tool_call["name"]]

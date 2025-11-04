@@ -1,14 +1,3 @@
-import os
-import html
-import asyncio
-from contextlib import asynccontextmanager
-from fastapi import FastAPI, Form
-from fastapi.responses import Response
-from dotenv import load_dotenv
-
-# --- Load environment variables ---
-load_dotenv()
-
 # --- LangGraph core imports ---
 from app.langgraph.graph_config import create_graph, invoke_graph, extract_last_ai_text
 
@@ -20,6 +9,19 @@ from app.services.translation_service import TranslationService
 
 # --- Voice processing components ---
 from app.speech.speech_processor import queue_voice_task, process_voice_message_background
+
+import os
+import html
+import asyncio
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, Form
+from fastapi.responses import Response
+from dotenv import load_dotenv
+
+# --- Load environment variables ---
+load_dotenv()
+
+
 
 # -------------------------------------------------------
 #   FastAPI Application Setup with Lifespan Management
