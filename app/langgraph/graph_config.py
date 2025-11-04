@@ -54,9 +54,25 @@ class BasicToolNode:
     async def __call__(self, inputs: dict):
         # Extract thread_id and wa_id from config for tracing
         # --- FIX: Properly extract and inject wa_id + thread_id ---
+        # configurable = inputs.get("configurable") or {}
+        # thread_id = configurable.get("thread_id") or configurable.get("wa_id") or "unknown"
+        # wa_id = configurable.get("wa_id") or thread_id
+
+        # --- FIX: Ensure valid thread_id + wa_id are always available ---
         configurable = inputs.get("configurable") or {}
-        thread_id = configurable.get("thread_id") or configurable.get("wa_id") or "unknown"
-        wa_id = configurable.get("wa_id") or thread_id
+        global _current_thread_id
+        
+        thread_id = configurable.get("thread_id") or _current_thread_id
+        wa_id = configurable.get("wa_id") or thread_id  # use thread_id as fallback for wa_id
+        
+        # Defensive fallback: never allow 'unknown'
+        if thread_id in ("unknown", None, ""):
+            thread_id = _current_thread_id or "default"
+        if wa_id in ("unknown", None, ""):
+            wa_id = thread_id
+        
+        print(f"[BasicToolNode] ✅ Propagated IDs → thread_id={thread_id}, wa_id={wa_id}")
+        
         
         if messages := inputs.get("messages", []):
             message = messages[-1]
@@ -383,8 +399,6 @@ async def invoke_graph(graph, user_message: str, thread_id: str = "default", is_
         
         # Re-raise the original exception to maintain proper error handling
         raise
-
-
 
 
 
