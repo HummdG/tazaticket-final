@@ -164,7 +164,7 @@ async def SearchResultManager(
 async def StoreSearchResult(
     wa_id: str,
     thread_id: str,
-    search_data: Dict[str, Any],
+    search_data: Optional[Dict[str, Any]],
     user_input_text: str = "",
     thread_id_param: str = "default",
     mode_of_conversation: Optional[str] = None,
