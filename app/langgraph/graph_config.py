@@ -108,6 +108,17 @@ class BasicToolNode:
             print(f"[LangGraph-Trace] 📤 TOOL RESULT: '{tool_call['name']}' | Thread: {thread_id} | Success: {tool_result is not None}")
             print(f"[LangGraph-Trace]    Result preview: {str(tool_result)[:200]}{'...' if len(str(tool_result)) > 200 else ''}")
             
+            # --- FIX: prevent infinite loops from repeating failed bookings ---
+            if isinstance(tool_result, dict) and tool_result.get("stop_graph"):
+                print(f"[GraphConfig] ⛔ Stop marker received, terminating graph for thread {thread_id}")
+                return {"messages": [
+                    ToolMessage(
+                        content=str(tool_result),
+                        name=tool_call["name"],
+                        tool_call_id=tool_call["id"],
+                    )
+                ]}
+            
             outputs.append(
                 ToolMessage(
                     content=str(tool_result),
@@ -303,12 +314,13 @@ async def invoke_graph(graph, user_message: str, thread_id: str = "default", is_
         print(f"[GraphConfig] Converted to {len(langchain_messages)} LangChain messages")
         print(f"[LangGraph-Trace] 📝 MESSAGES: Prepared {len(langchain_messages)} messages for LLM")
         
-        # Create configuration with voice mode and language information
+        # --- FIX: propagate wa_id consistently ---
         config = {
             "configurable": {
                 "thread_id": thread_id,
+                "wa_id": thread_id,  # ensure WhatsApp ID is passed downstream
                 "is_voice_mode": is_voice,
-                "detected_language": detected_language
+                "detected_language": detected_language,
             }
         }
         

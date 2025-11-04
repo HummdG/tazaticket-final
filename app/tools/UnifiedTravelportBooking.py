@@ -36,7 +36,8 @@ async def unified_travelport_booking(wa_id: str, selected_option_id: str, travel
     if not search:
         return {
             "status": "error",
-            "message": f"No recent flight search found. Please run a new search before booking."
+            "message": f"No recent flight search found. Please run a new search before booking.",
+            "stop_graph": True  # 👈 signal to terminate graph, not retry
         }    
     # Find the selected option among the flight options
     selected_flight_option = None
