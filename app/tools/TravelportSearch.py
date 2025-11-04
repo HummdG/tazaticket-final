@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 import os
 import httpx
 import asyncio
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 # Import utility functions
@@ -24,6 +25,10 @@ try:
 except ImportError:
     from travelport_parser import resolve_references
 
+# Token caching
+_token_cache = {"token": None, "expiry": 0}
+_token_lock = asyncio.Lock()
+
 # Done: create a shared httpx.AsyncClient for pooling
 _limits = httpx.Limits(max_connections=20, max_keepalive_connections=10)  # tune as needed
 _default_timeout = httpx.Timeout(10.0, read=30.0)  # adjust
@@ -34,6 +39,46 @@ def _get_shared_client() -> httpx.AsyncClient:
     if _shared_client is None or _shared_client.is_closed:
         _shared_client = httpx.AsyncClient(limits=_limits, timeout=_default_timeout)
     return _shared_client
+
+async def get_access_token():
+    """Get access token with caching to prevent repeated OAuth calls"""
+    async with _token_lock:
+        now = time.time()
+        if _token_cache["token"] and _token_cache["expiry"] > now + 60:
+            return _token_cache["token"]
+
+        # Load environment variables
+        load_dotenv()
+        CLIENT_ID       = os.getenv("TRAVELPORT_CLIENT_ID")
+        CLIENT_SECRET   = os.getenv("TRAVELPORT_CLIENT_SECRET")
+        USERNAME        = os.getenv("TRAVELPORT_USERNAME")
+        PASSWORD        = os.getenv("TRAVELPORT_PASSWORD")
+        OAUTH_URL       = "https://oauth.pp.travelport.com/oauth/oauth20/token"
+
+        # Fetch new token
+        data = {
+            "grant_type":    "password",
+            "username":      USERNAME,
+            "password":      PASSWORD,
+            "client_id":     CLIENT_ID,
+            "client_secret": CLIENT_SECRET,
+            "scope":         "openid"
+        }
+        
+        client = _get_shared_client()
+        resp = await client.post(
+            OAUTH_URL,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            data=data
+        )
+        resp.raise_for_status()
+        body = resp.json()
+        token = body["access_token"]
+        
+        # Set expiry to 55 minutes from now (less than 60 min to account for network delays)
+        expiry = now + 3300  # 55 min
+        _token_cache.update({"token": token, "expiry": expiry})
+        return token
 
 def run_async(coro):
     """Run async code safely from sync context, avoiding nested loop crashes."""
@@ -81,18 +126,12 @@ async def TravelportSearch(payload: dict, trip_type: str = "one-way"):
     print(f"[TravelportDebug] Payload keys: {list(payload.keys())[:10]}")
     load_dotenv()  # Reads .env in current directory
 
-    CLIENT_ID       = os.getenv("TRAVELPORT_CLIENT_ID")
-    CLIENT_SECRET   = os.getenv("TRAVELPORT_CLIENT_SECRET")
-    USERNAME        = os.getenv("TRAVELPORT_USERNAME")
-    PASSWORD        = os.getenv("TRAVELPORT_PASSWORD")
     ACCESS_GROUP    = os.getenv("TRAVELPORT_ACCESS_GROUP")
-
-    OAUTH_URL       = "https://oauth.pp.travelport.com/oauth/oauth20/token"
     CATALOG_URL     = "https://api.pp.travelport.com/11/air/catalog/search/catalogproductofferings"
 
-    # Step 1: Get token
+    # Step 1: Get token (reuse cached token)
     try:
-        token = await fetch_password_token(CLIENT_ID, CLIENT_SECRET, USERNAME, PASSWORD, OAUTH_URL)
+        token = await get_access_token()
     except httpx.HTTPError as e:
         return {
             "ok": False,

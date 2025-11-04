@@ -5,6 +5,7 @@ Travelport Reservation Tools - Tools for managing flight reservations with Trave
 import os
 import json
 import requests
+import time
 from datetime import datetime
 from langchain_core.tools import tool
 from typing import Optional, Dict, Any
@@ -17,11 +18,74 @@ _limits = httpx.Limits(max_connections=20, max_keepalive_connections=10)
 _default_timeout = httpx.Timeout(10.0, read=30.0)
 _shared_client = None
 
+# Token caching (same as TravelportSearch for consistency)
+_token_cache = {"token": None, "expiry": 0}
+_token_lock = asyncio.Lock()
+
 def _get_shared_client() -> httpx.AsyncClient:
     global _shared_client
     if _shared_client is None or _shared_client.is_closed:
         _shared_client = httpx.AsyncClient(limits=_limits, timeout=_default_timeout)
     return _shared_client
+
+async def get_auth_token():
+    """Get access token with caching to prevent repeated OAuth calls (consistency with TravelportSearch)"""
+    async with _token_lock:
+        now = time.time()
+        if _token_cache["token"] and _token_cache["expiry"] > now + 60:
+            return _token_cache["token"]
+
+        load_dotenv()  # Ensure we load environment variables
+        
+        CLIENT_ID = os.getenv("TRAVELPORT_CLIENT_ID")
+        CLIENT_SECRET = os.getenv("TRAVELPORT_CLIENT_SECRET")
+        USERNAME = os.getenv("TRAVELPORT_USERNAME")
+        PASSWORD = os.getenv("TRAVELPORT_PASSWORD")
+        OAUTH_URL = "https://oauth.pp.travelport.com/oauth/oauth20/token"
+        
+        # Validate required parameters
+        if not all([CLIENT_ID, CLIENT_SECRET, USERNAME, PASSWORD]):
+            missing_params = []
+            if not CLIENT_ID:
+                missing_params.append("TRAVELPORT_CLIENT_ID")
+            if not CLIENT_SECRET:
+                missing_params.append("TRAVELPORT_CLIENT_SECRET")
+            if not USERNAME:
+                missing_params.append("TRAVELPORT_USERNAME")
+            if not PASSWORD:
+                missing_params.append("TRAVELPORT_PASSWORD")
+            
+            raise ValueError(f"Missing required environment variables: {', '.join(missing_params)}")
+        
+        # Make async HTTP request using httpx like TravelportSearch does
+        data = {
+            "grant_type": "password",
+            "username": USERNAME,
+            "password": PASSWORD,
+            "client_id": CLIENT_ID,
+            "client_secret": CLIENT_SECRET,
+            "scope": "openid"
+        }
+        
+        # Use the same httpx client as TravelportSearch for consistency
+        client = _get_shared_client()
+        
+        try:
+            resp = await client.post(
+                OAUTH_URL,
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                data=data
+            )
+            resp.raise_for_status()
+            body = resp.json()
+            token = body["access_token"]
+            
+            # Set expiry to 55 minutes from now (less than 60 min to account for network delays)
+            expiry = now + 3300  # 55 min
+            _token_cache.update({"token": token, "expiry": expiry})
+            return token
+        except httpx.HTTPError as e:
+            raise Exception(f"Failed to obtain OAuth token: {str(e)}")
 
 
 @tool("TravelportAuthentication")

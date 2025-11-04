@@ -150,6 +150,17 @@ class SearchResultManager:
         # Store latest search for thread
         thread_search_key = f"thread_latest_search:{thread_id}"
         await redis_conn.setex(thread_search_key, self.result_ttl, search_id)
+        
+        # Optional: mark completed bulk searches for Dynamo flush
+        # Check if this was a bulk search (indicated by multiple dates or bulk-related search type)
+        search_data_str = json.dumps(search_data)
+        if "bulk-search" in search_data.get("trip_type", "") or len(search_data.get("raw_response", {}).get("ResolvedOfferings", [])) > 5:
+            try:
+                dynamo_table = self._get_dynamo_table()
+                dynamo_table.put_item(Item=search_result.to_dict())
+                print(f"[SearchResultManager] Bulk search {search_id} persisted to DynamoDB")
+            except Exception as e:
+                print(f"[SearchResultManager] DynamoDB persist failed: {e}")
 
         print(f"[SearchResultManager] Stored search result {search_id} for user {wa_id}")
         return search_id

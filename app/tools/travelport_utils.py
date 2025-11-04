@@ -582,125 +582,72 @@ def extract_cheapest_round_trip_summary(resp: Dict[str, Any]) -> Optional[Dict[s
 # ------------------------------
 # Bulk search date parsing (unchanged)
 # ------------------------------
-def parse_date_range(user_input: str, departure_date: Optional[str] = None) -> Tuple[List[str], bool]:
+def parse_date_range(user_input_text: str, departure_date: str = None):
     """
-    Parse user input to detect bulk search patterns and return list of dates.
-    Returns (list_of_dates, is_bulk_search)
-    
-    Examples:
-    - "find me cheapest ticket in november" -> all days in current year November
-    - "find me cheapest ticket next week" -> next 7 days  
-    - "cheapest ticket between 2025-01-01 and 2025-01-31" -> date range
-    - "cheapest ticket on 2025-01-15" -> single date (not bulk)
+    Detect whether the user input implies a bulk/flexible date search or a specific single date.
+    Returns (dates, is_bulk)
     """
-    user_input_lower = user_input.lower()
-    today = datetime.now().date()
-    # Single date patterns - not bulk search
-    single_date_patterns = [r'on \d{4}-\d{2}-\d{2}', r'for \d{4}-\d{2}-\d{2}', r'tomorrow', r'today']
-    import re as _re
-    for pattern in single_date_patterns:
-        if _re.search(pattern, user_input_lower):
+    import re
+    from datetime import date, timedelta
+    text = user_input_text.lower().strip()
+    today = date.today()
+
+    # ---- Single-date detection (explicit days) ----
+    single_date_patterns = [
+        r'on \d{4}-\d{2}-\d{2}',
+        r'\b\d{1,2}(st|nd|rd|th)?\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\b',
+        r'\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\.?\s+\d{1,2}\b',
+        r'\b\d{4}-\d{2}-\d{2}\b',
+        r'\b\d{1,2}/\d{1,2}/\d{2,4}\b',
+        r'\b(today|tomorrow)\b'
+    ]
+    for pat in single_date_patterns:
+        if re.search(pat, text):
+            # explicit single-day query
             if departure_date:
                 return [departure_date], False
-            return [], False
-    
-    # Bulk search patterns
-    bulk_patterns = {
-        'november': ('month', 11),
-        'december': ('month', 12),
-        'january': ('month', 1),
-        'february': ('month', 2),
-        'march': ('month', 3),
-        'april': ('month', 4),
-        'may': ('month', 5),
-        'june': ('month', 6),
-        'july': ('month', 7),
-        'august': ('month', 8),
-        'september': ('month', 9),
-        'october': ('month', 10),
-        'next week': ('next_week', None),
-        'this week': ('this_week', None),
-        'next month': ('next_month', None),
-        'this month': ('this_month', None),
-    }
+            return [today], False
 
-    dates = []
-    is_bulk = False
-    
-    # Check for month patterns
-    for pattern, (period_type, month_num) in bulk_patterns.items():
-        if pattern in user_input_lower:
-            is_bulk = True
-            if period_type == 'month' and month_num:
-                # Generate all days in the specified month
-                year = today.year
-                if month_num < today.month:
-                    year += 1  # Next year if month already passed
-                
-                # Get number of days in month
-                days_in_month = calendar.monthrange(year, month_num)[1]
-                
-                for day in range(1, days_in_month + 1):
-                    date_str = f"{year:04d}-{month_num:02d}-{day:02d}"
-                    dates.append(date_str)
-            elif period_type == 'next_week':
-                # Next 7 days starting from tomorrow
-                start_date = today + timedelta(days=1)
-                for i in range(7):
-                    date_str = (start_date + timedelta(days=i)).strftime('%Y-%m-%d')
-                    dates.append(date_str)
-            elif period_type == 'this_week':
-                # Remaining days of current week
-                days_until_sunday = (6 - today.weekday()) % 7
-                for i in range(days_until_sunday + 1):
-                    date_str = (today + timedelta(days=i)).strftime('%Y-%m-%d')
-                    dates.append(date_str)
-            elif period_type == 'next_month':
-                # All days in next month
-                if today.month == 12:
-                    next_month = 1
-                    next_year = today.year + 1
-                else:
-                    next_month = today.month + 1
-                    next_year = today.year
-                days_in_month = calendar.monthrange(next_year, next_month)[1]
-                for day in range(1, days_in_month + 1):
-                    date_str = f"{next_year:04d}-{next_month:02d}-{day:02d}"
-                    dates.append(date_str)
-            elif period_type == 'this_month':
-                # Remaining days in current month
-                days_in_month = calendar.monthrange(today.year, today.month)[1]
-                for day in range(today.day, days_in_month + 1):
-                    date_str = f"{today.year:04d}-{today.month:02d}-{day:02d}"
-                    dates.append(date_str)
-            break
-    
-    # Check for "between X and Y" pattern
-    between_pattern = r'between\s+(\d{4}-\d{2}-\d{2})\s+and\s+(\d{4}-\d{2}-\d{2})'
-    match = _re.search(between_pattern, user_input_lower)
-    if match:
-        is_bulk = True
-        start_date_str, end_date_str = match.groups()
-        try:
-            start_date = datetime.strptime(start_date_str, '%Y-%m-%d').date()
-            end_date = datetime.strptime(end_date_str, '%Y-%m-%d').date()
-            current_date = start_date
-            while current_date <= end_date:
-                dates.append(current_date.strftime('%Y-%m-%d'))
-                current_date += timedelta(days=1)
-        except ValueError:
-            pass  # Invalid date format
-    
-    return dates, is_bulk
+    # ---- Bulk keywords / phrases ----
+    if any(phrase in text for phrase in ['next week', 'this week', 'next month', 'this month', 'weekend']):
+        return [(today, today + timedelta(days=7))], True
+
+    # ---- Month-only detection ----
+    months = {
+        'january': 1, 'february': 2, 'march': 3, 'april': 4, 'may': 5, 'june': 6,
+        'july': 7, 'august': 8, 'september': 9, 'october': 10, 'november': 11, 'december': 12
+    }
+    for mname, mnum in months.items():
+        if re.search(rf'\b(in\s+)?{mname}\b', text):
+            # month word without explicit day → bulk
+            return [(today.replace(month=mnum, day=1), today.replace(month=mnum, day=28))], True
+
+    # default
+    return [departure_date or today], False
 
 def is_bulk_search_query(user_input: str) -> bool:
+    """Return True only for clearly flexible-date requests"""
+    import re
+    txt = user_input.lower()
+
+    # reject if explicit day-month pattern present
+    if re.search(r'\b\d{1,2}(st|nd|rd|th)?\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\b', txt):
+        return False
+    if re.search(r'\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\.?\s+\d{1,2}\b', txt):
+        return False
+
     bulk_indicators = [
-        'cheapest in', 'cheapest ticket in', 'cheapest flight in', 'find cheapest', 'best price in', 'lowest fare in',
-        'between', 'next week', 'this week', 'next month', 'this month',
-        'november','december','january','february','march','april','may','june','july','august','september','october'
+        'cheapest in', 'cheapest ticket in', 'cheapest flight in', 'find cheapest', 'best price in',
+        'lowest fare in', 'between', 'next week', 'this week', 'next month', 'this month'
     ]
-    user_lower = user_input.lower()
-    return any(indicator in user_lower for indicator in bulk_indicators)
+    if any(b in txt for b in bulk_indicators):
+        return True
+
+    # month word without day
+    if re.search(r'\b(january|february|march|april|may|june|july|august|september|october|november|december)\b', txt):
+        if not re.search(r'\b\d{1,2}\b', txt):
+            return True
+    return False
 
 def extract_return_duration(user_input: str) -> Optional[int]:
     import re as _re
