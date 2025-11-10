@@ -252,7 +252,43 @@ async def FlightSearchStateMachine(
         if sm.departure_date:
             print(f"[FSM] departure_date already set ({sm.departure_date}) — skipping bulk detection")
             # directly call normal single or round-trip search
-            if sm.type_of_trip == "round" and sm.return_date:
+            # if sm.type_of_trip == "round" and sm.return_date:
+                
+            #     print(f"[FSM] Performing regular round-trip flight search for {sm.origin} → {sm.destination}")
+            #     payload = RoundTripFlightSearch(
+            #         origin=sm.origin,
+            #         destination=sm.destination,
+            #         departure_date=sm.departure_date,
+            #         return_date=sm.return_date,
+            #         number_of_passengers=sm.number_of_passengers,
+            #         carriers=parse_carrier_preference(user_input_text or "")
+            #     )
+            #     # Before performing a search, clear old cache for this user/thread
+            #     redis_conn = await redis_manager.get_connection()
+            #     await redis_conn.delete(f"thread_latest_search:{thread_id}")
+            #     await redis_conn.delete(f"user_search_list:{thread_id}")
+            #     print(f"[FSM] Cleared old search cache for thread {thread_id} to force fresh search.")
+
+            #     result = await TravelportSearch.ainvoke({"payload": payload, "trip_type": "round-trip"})
+            # else:
+            #     print(f"[FSM] Performing regular one-way flight search for {sm.origin} → {sm.destination}")
+            #     payload = OneWayFlightSearch(
+            #         origin=sm.origin,
+            #         destination=sm.destination,
+            #         departure_date=sm.departure_date,
+            #         number_of_passengers=sm.number_of_passengers,
+            #         carriers=parse_carrier_preference(user_input_text or "")
+            #     )
+            #                     # Before performing a search, clear old cache for this user/thread
+            #     redis_conn = await redis_manager.get_connection()
+            #     await redis_conn.delete(f"thread_latest_search:{thread_id}")
+            #     await redis_conn.delete(f"user_search_list:{thread_id}")
+            #     print(f"[FSM] Cleared old search cache for thread {thread_id} to force fresh search.")
+                
+            #     result = await TravelportSearch.ainvoke({"payload": payload, "trip_type": "one-way"})
+
+            # Replace any check of 'round' with 'round-trip' to match normalization earlier
+            if sm.type_of_trip == "round-trip" and sm.return_date:
                 print(f"[FSM] Performing regular round-trip flight search for {sm.origin} → {sm.destination}")
                 payload = RoundTripFlightSearch(
                     origin=sm.origin,
@@ -262,7 +298,7 @@ async def FlightSearchStateMachine(
                     number_of_passengers=sm.number_of_passengers,
                     carriers=parse_carrier_preference(user_input_text or "")
                 )
-                # Before performing a search, clear old cache for this user/thread
+
                 redis_conn = await redis_manager.get_connection()
                 await redis_conn.delete(f"thread_latest_search:{thread_id}")
                 await redis_conn.delete(f"user_search_list:{thread_id}")
@@ -278,18 +314,18 @@ async def FlightSearchStateMachine(
                     number_of_passengers=sm.number_of_passengers,
                     carriers=parse_carrier_preference(user_input_text or "")
                 )
-                                # Before performing a search, clear old cache for this user/thread
+
                 redis_conn = await redis_manager.get_connection()
                 await redis_conn.delete(f"thread_latest_search:{thread_id}")
                 await redis_conn.delete(f"user_search_list:{thread_id}")
                 print(f"[FSM] Cleared old search cache for thread {thread_id} to force fresh search.")
-                
                 result = await TravelportSearch.ainvoke({"payload": payload, "trip_type": "one-way"})
+
 
             # Store search results if successful
             if result.get("ok"):
                 try:
-                    if sm.type_of_trip == "round" and sm.return_date:
+                    if sm.type_of_trip == "round-trip" and sm.return_date:
                         search_data = {
                             "origin": sm.origin,
                             "destination": sm.destination,
@@ -436,7 +472,7 @@ async def FlightSearchStateMachine(
                     await redis_conn.delete(f"thread_latest_search:{thread_id}")
                     await redis_conn.delete(f"user_search_list:{thread_id}")
                     print(f"[FSM] Cleared old search cache for thread {thread_id} to force fresh search.")
-                    
+
                     result = await TravelportSearch.ainvoke({"payload": payload, "trip_type": "round-trip"})
 
                     # Store search results if successful
