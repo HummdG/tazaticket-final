@@ -7,23 +7,23 @@ import asyncio
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-# Import utility functions
-try:
-    from .travelport_utils import (
-        extract_cheapest_one_way_summary,
-        extract_cheapest_round_trip_summary
-    )
-except ImportError:
-    from travelport_utils import (
-        extract_cheapest_one_way_summary,
-        extract_cheapest_round_trip_summary
-    )
+# # Import utility functions
+# try:
+#     from .travelport_utils import (
+#         extract_cheapest_one_way_summary,
+#         extract_cheapest_round_trip_summary
+#     )
+# except ImportError:
+#     from travelport_utils import (
+#         extract_cheapest_one_way_summary,
+#         extract_cheapest_round_trip_summary
+#     )
 
-# Import the new travelport parser
-try:
-    from .travelport_parser import resolve_references
-except ImportError:
-    from travelport_parser import resolve_references
+# # Import the new travelport parser
+# try:
+#     from .travelport_parser import resolve_references
+# except ImportError:
+#     from travelport_parser import resolve_references
 
 # Token caching
 _token_cache = {"token": None, "expiry": 0}
@@ -160,16 +160,16 @@ async def TravelportSearch(payload: dict, trip_type: str = "one-way"):
     try:
         resp_json = await fetch_catalog(CATALOG_URL, headers, payload)
         
-        # Apply the reference resolver to enrich the response
-        resp_enriched = resolve_references(resp_json)
+        # # Apply the reference resolver to enrich the response
+        # resp_enriched = resolve_references(resp_json)
         
         try:
-            print("[TravelportDebug] ✅ Travelport responded:", json.dumps(resp_enriched)[:800])
+            print("[TravelportDebug] ✅ Travelport responded:", json.dumps(resp_json))
         except Exception as e:
             print("[TravelportDebug] ⚠️ Failed to print Travelport raw response:", e)
 
         # Check if the response contains an error result
-        error_result = resp_enriched.get("CatalogProductOfferingsResponse", {}).get("Result", {}).get("Error")
+        error_result = resp_json.get("CatalogProductOfferingsResponse", {}).get("Result", {}).get("Error")
         if error_result:
             # Extract the error message if available
             error_message = "No specific error message"
@@ -182,37 +182,37 @@ async def TravelportSearch(payload: dict, trip_type: str = "one-way"):
                 "ok": False,
                 "error": f"Travelport API returned an error: {error_message}",
                 "summary": None,
-                "raw": resp_enriched
+                "raw": resp_json
             }
 
-        # Extract summary
-        if trip_type == "one-way":
-            summary = extract_cheapest_one_way_summary(resp_enriched)
-        else:
-            summary = extract_cheapest_round_trip_summary(resp_enriched)
+        # # Extract summary
+        # if trip_type == "one-way":
+        #     summary = extract_cheapest_one_way_summary(resp_enriched)
+        # else:
+        #     summary = extract_cheapest_round_trip_summary(resp_enriched)
 
         # Handle case where no offerings are found
-        if not summary:
-            return {
-                "ok": False,
-                "error": "No flight options found for the given criteria",
-                "summary": None,
-                "raw": resp_enriched
-            }
+        # if not summary:
+        #     return {
+        #         "ok": False,
+        #         "error": "No flight options found for the given criteria",
+        #         "summary": None,
+        #         "raw": resp_enriched
+        #     }
 
-        # Legacy price extraction
-        try:
-            cheapest_flight_price = resp_enriched["CatalogProductOfferingsResponse"]["CatalogProductOfferings"]["CatalogProductOffering"][0]["ProductBrandOptions"][0]["ProductBrandOffering"][0]["BestCombinablePrice"]["TotalPrice"]
-        except (KeyError, IndexError):
-            cheapest_flight_price = None
+        # # Legacy price extraction
+        # try:
+        #     cheapest_flight_price = resp_enriched["CatalogProductOfferingsResponse"]["CatalogProductOfferings"]["CatalogProductOffering"][0]["ProductBrandOptions"][0]["ProductBrandOffering"][0]["BestCombinablePrice"]["TotalPrice"]
+        # except (KeyError, IndexError):
+        #     cheapest_flight_price = None
         
         print(f"[TravelportDebug] 🛰️ TravelportSearch called with trip_type={trip_type}")
         print(f"[TravelportDebug] Payload keys: {list(payload.keys())[:10]}")
         return {
             "ok": True,
-            "price": cheapest_flight_price,
-            "raw": resp_enriched,
-            "summary": summary
+            # "price": cheapest_flight_price,
+            "raw": resp_json,
+            # "summary": summary
         }
 
     except httpx.HTTPStatusError as e:
