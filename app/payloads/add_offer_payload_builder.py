@@ -1,0 +1,31 @@
+# app/payloads/add_offer_payload_builder.py
+def build_add_offer_payload_from_pbo(pbo: dict, reference_list: dict, passengers=1, passenger_type="ADT"):
+    flight_refs = pbo.get("flightRefs", [])
+    flights = reference_list.get("ReferenceListFlight", {}).get("Flight", [])
+    criteria = []
+
+    for idx, ref in enumerate(flight_refs, 1):
+        f = next((x for x in flights if x.get("id") == ref), None)
+        if not f: continue
+        dep, arr = f.get("Departure", {}), f.get("Arrival", {})
+        criteria.append({
+            "flightNumber": f.get("number"),
+            "carrier": f.get("carrier"),
+            "departureDate": dep.get("date"),
+            "arrivalDate": arr.get("date"),
+            "from": dep.get("location"),
+            "to": arr.get("location"),
+            "cabin": f.get("cabin", "Economy"),
+            "segmentSequence": idx,
+        })
+
+    return {
+        "@type": "OfferQueryBuildFromProducts",
+        "BuildFromProductsRequest": {
+            "@type": "BuildFromProductsRequestAir",
+            "PassengerCriteria": [
+                {"@type": "PassengerCriteria", "number": passengers, "passengerTypeCode": passenger_type}
+            ],
+            "ProductCriteriaAir": [{"SpecificFlightCriteria": criteria}]
+        }
+    }
