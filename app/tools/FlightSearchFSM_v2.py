@@ -5,7 +5,7 @@ Rewritten to be deterministic and to integrate with the agreed flatten/store/ret
 
 from langchain_core.tools import tool
 from datetime import datetime
-import re
+
 import json
 from typing import Optional, Any, Dict
 import asyncio
@@ -32,6 +32,7 @@ from .city_codes import resolve_phrase_to_airports
 
 # Redis manager (kept)
 from ..langgraph.redis_manager import redis_manager
+from ..langgraph.memory_manager import memory_manager
 
 # New flattener (agreed)
 from ..services.flight_flattener import flatten_travelport_response
@@ -210,6 +211,7 @@ async def FlightSearchStateMachine(
             await _save_state_machine_to_redis(thread_id, sm)
             return "✅ All flight search parameters have been set successfully. Proceeding to search flights..."
 
+
     # --------------- state is complete: perform deterministic search --------------
     # # Bulk detection first (preserve existing BulkFlightSearch behavior)
     # if is_bulk_search_query(user_input_text or ""):
@@ -329,7 +331,9 @@ async def FlightSearchStateMachine(
         search_id = await search_result_manager.store_search_result(store_payload)
     except Exception as e:
         return f"⚠️ Storing search results failed: {e}"
+    # Store latest search_id for this thread (so agent can retrieve later)
 
+    await memory_manager.set_latest_search_id(thread_id, search_id)
     # Reset FSM state
     await _save_state_machine_to_redis(thread_id, ConversationFlowSM())
 
@@ -338,8 +342,10 @@ async def FlightSearchStateMachine(
         "status": "success",
         "message": "✅ All flight details collected and search completed.",
         "summary": text_summary,
-        "search_id": search_id
+        "search_id": search_id,
+        "thread_id": thread_id
     }
+
 
 
 # BulkFlightSearch remains in original codebase; we don't modify it here.

@@ -401,7 +401,6 @@ async def invoke_graph(graph, user_message: str, thread_id: str = "default", is_
         raise
 
 
-
 def extract_last_ai_text(state: dict) -> str:
     """
     Extract the last AI message content from the graph state

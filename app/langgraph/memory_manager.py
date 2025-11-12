@@ -45,7 +45,6 @@ from .redis_manager import redis_manager
 DEFAULT_MAX_POOL_CONNECTIONS = 50  # tune this based on expected concurrency and HTTP session reuse
 
 
-
 # --- Configurable production knobs ---
 DEFAULT_MAX_CONCURRENT_BATCH_WRITES = 8  # tune to match DynamoDB RCUs / throughput
 
@@ -809,6 +808,22 @@ class MemoryManager:
         monitor_task = asyncio.create_task(memory_monitor())
         await self._track_task(monitor_task)
         print("[MemoryManager] Started periodic Redis memory monitoring")
+
+        async def set_latest_search_id(self, thread_id: str, search_id: str):
+        redis_conn = await self.redis.get_connection()
+        await redis_conn.setex(f"thread_latest_search:{thread_id}", 86400, search_id)
+
+    async def get_latest_search_id(self, thread_id: str) -> str | None:
+        redis_conn = await self.redis.get_connection()
+        value = await redis_conn.get(f"thread_latest_search:{thread_id}")
+        if value and isinstance(value, bytes):
+            value = value.decode()
+        return value
+    
+    async def set_latest_search_id(self, thread_id: str, search_id: str):
+        redis_conn = await self.redis.get_connection()
+        await redis_conn.setex(f"thread_latest_search:{thread_id}", 86400, search_id)
+
 
 
 # Global instance
