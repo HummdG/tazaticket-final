@@ -306,6 +306,10 @@ async def FlightSearchStateMachine(
 
     # Flatten the raw response into text + structured offers
     try:
+        print("Raw Response: \n")
+        print(raw_response)
+        print(f"type of raw response: {type(raw_response)}")
+        print(f"keys of response: {raw_response.keys()}")
         text_summary, structured_offers = flatten_travelport_response(raw_response)
         print("Results flattened")
         print(f"text_summary: \n{text_summary}")
