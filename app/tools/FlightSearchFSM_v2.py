@@ -310,7 +310,7 @@ async def FlightSearchStateMachine(
         print(raw_response)
         print(f"type of raw response: {type(raw_response)}")
         print(f"keys of response: {raw_response.keys()}")
-        text_summary, structured_offers = flatten_travelport_response(raw_response)
+        text_summary, structured_offers = flatten_travelport_response(raw_response["raw"])
         print("Results flattened")
         print(f"text_summary: \n{text_summary}")
     except Exception as e:
