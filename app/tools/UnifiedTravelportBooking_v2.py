@@ -54,6 +54,9 @@ async def UnifiedTravelportBooking_v2(
     offer_ref = selected_option.get("offer_ref")
     product_refs = selected_option.get("product_ref_list", [])
 
+    # Debug
+    print("DEBUG OPTION:\n", json.dumps(selected_option, indent=2))
+
     if not offer_ref or not product_refs:
         return {
             "status": "error",
@@ -66,7 +69,6 @@ async def UnifiedTravelportBooking_v2(
         passengers=len(traveler_details),
         passenger_type="ADT"
     )
-
 
 
     traveler_payload = build_traveler_payload(travelers=traveler_details)
