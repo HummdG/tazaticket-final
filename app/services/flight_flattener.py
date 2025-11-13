@@ -127,16 +127,21 @@ def flatten_travelport_response(raw_response: dict):
 
                 # Build structured record
                 option_struct = {
-                    "option_id": str(uuid.uuid4()),  # Unique per brand-product combo
+                    "option_id": str(uuid.uuid4()),
                     "brand": brand_obj,
                     "product": product_obj,
+                    "product_ref": product_ref,
+                    "product_ref_list": [product_ref] if product_ref else [],
                     "terms": terms_obj,
                     "flights": flights,
                     "stops": stops,
                     "layover": layover_summary,
                     "price": price,
                     "currency": currency,
+                    "offer_ref": offer_id
                 }
+
+
                 offer_struct["options"].append(option_struct)
 
                 # Build text output
