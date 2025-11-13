@@ -307,6 +307,8 @@ async def FlightSearchStateMachine(
     # Flatten the raw response into text + structured offers
     try:
         text_summary, structured_offers = flatten_travelport_response(raw_response)
+        print("Results flattened")
+        print(f"text_summary: \n{text_summary}")
     except Exception as e:
         return f"⚠️ Flattening failed: {e}"
 
@@ -329,6 +331,7 @@ async def FlightSearchStateMachine(
     # Store and get search_id (await deterministically)
     try:
         search_id = await search_result_manager.store_search_result(store_payload)
+        print("Payload Stored")
     except Exception as e:
         return f"⚠️ Storing search results failed: {e}"
     # Store latest search_id for this thread (so agent can retrieve later)
