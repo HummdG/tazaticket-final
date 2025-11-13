@@ -3,11 +3,14 @@ LangGraph v2 Configuration
 Simplified deterministic graph connecting FSM → SearchResultManager → Booking
 """
 
-
+import os
 from typing_extensions import TypedDict
 from typing import Annotated
+from dotenv import load_dotenv
+
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
+from langgraph.checkpoint.memory import InMemorySaver
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import ToolMessage, HumanMessage, AIMessage
 
@@ -215,39 +218,111 @@ def route_tools(state: State):
 
 
 
-# ------------------------------------------------
+# ----------------------------------------A--------
 # Graph Builder
 # ------------------------------------------------
+
+
+# def create_graph():
+#     tools = [FlightSearchStateMachine, 
+#              UnifiedTravelportBooking_v2,
+#              search_memory_get_latest_search_id,
+#              search_result_get_option
+#              ]
+    
+#     llm = init_chat_model("gpt-4o-mini", model_provider="openai", temperature=0)
+#     llm_with_tools = llm.bind_tools(tools)
+
+#     builder = StateGraph(State)
+
+#     async def chatbot_node(state: State):
+#         return await chatbot(state, llm_with_tools)
+
+#     tool_node = BasicToolNode(tools=tools)
+
+#     builder.add_node("chatbot", chatbot_node)
+#     builder.add_node("tools", tool_node)
+
+#     builder.add_conditional_edges(
+#         "chatbot",
+#         lambda s: "tools" if hasattr(s["messages"][-1], "tool_calls") else END,
+#         {"tools": "tools", END: END},
+#     )
+#     builder.add_edge("tools", "chatbot")
+#     builder.add_edge(START, "chatbot")
+
+#     print("[Graph] ✅ LangGraph v2 ready.")
+#     return builder.compile()
+
+
 def create_graph():
+    """
+    Create and configure the LangGraph conversation flow
+    """
+    print("[LangGraph-Trace] 🏗️  GRAPH CREATION: Initializing LangGraph")
+    
+    # Load environment variables
+    load_dotenv()
+    
+    # Get OpenAI API key
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+    if not OPENAI_API_KEY:
+        raise ValueError("OPENAI_API_KEY environment variable is not set")
+    
+    # Initialize tools
     tools = [FlightSearchStateMachine, 
              UnifiedTravelportBooking_v2,
              search_memory_get_latest_search_id,
              search_result_get_option
              ]
     
+    print(f"[LangGraph-Trace]    Tools registered: {[tool.name for tool in tools]}")
+    
+    # Initialize LLM
     llm = init_chat_model("gpt-4o-mini", model_provider="openai", temperature=0)
     llm_with_tools = llm.bind_tools(tools)
-
-    builder = StateGraph(State)
-
+    
+    print("[LangGraph-Trace]    LLM initialized and tools bound")
+    
+    # Create state graph
+    graph_builder = StateGraph(State)
+    
+    # Create chatbot node with bound LLM
     async def chatbot_node(state: State):
         return await chatbot(state, llm_with_tools)
-
+    
+    # Add nodes
+    print("[LangGraph-Trace]    Adding nodes to graph")
+    graph_builder.add_node("chatbot", chatbot_node)
+    
     tool_node = BasicToolNode(tools=tools)
+    async def tool_node_wrapper(state):
+        return await tool_node(state)
+    graph_builder.add_node("tools", tool_node_wrapper)
+    
+    
 
-    builder.add_node("chatbot", chatbot_node)
-    builder.add_node("tools", tool_node)
-
-    builder.add_conditional_edges(
+    
+    # Add edges
+    print("[LangGraph-Trace]    Adding edges to graph")
+    graph_builder.add_conditional_edges(
         "chatbot",
-        lambda s: "tools" if hasattr(s["messages"][-1], "tool_calls") else END,
+        route_tools,
         {"tools": "tools", END: END},
     )
-    builder.add_edge("tools", "chatbot")
-    builder.add_edge(START, "chatbot")
-
-    print("[Graph] ✅ LangGraph v2 ready.")
-    return builder.compile()
+    
+    # Any time a tool is called, we return to the chatbot to decide the next step
+    graph_builder.add_edge("tools", "chatbot")
+    graph_builder.add_edge(START, "chatbot")
+    
+    # Add memory checkpoint (InMemorySaver for LangGraph checkpointing)
+    memory = InMemorySaver()
+    print("[LangGraph-Trace]    Compiling graph with memory checkpointer")
+    graph = graph_builder.compile(checkpointer=memory)
+    
+    print("[LangGraph-Trace] ✅ GRAPH CREATED: LangGraph compiled with InMemorySaver checkpointer")
+    
+    return graph
 
 
 
