@@ -69,10 +69,7 @@ async def UnifiedTravelportBooking_v2(
 
 
 
-
-
     traveler_payload = build_traveler_payload(travelers=traveler_details)
-
 
 
     # --- 3. Setup Travelport API Config ---
