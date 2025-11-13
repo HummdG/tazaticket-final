@@ -67,6 +67,14 @@ async def UnifiedTravelportBooking_v2(
         init_payload = {"@type": "ReservationID", "ReservationID": {}}
 
         async with session.post(init_url, headers=HEADERS, json=init_payload) as resp:
+            if resp.status != 200:
+                text = await resp.text()
+                return {
+                    "status": "error",
+                    "message": f"Travelport returned {resp.status}",
+                    "response": text
+                }
+            
             init_data = await resp.json()
             reservation_id = (
                 init_data.get("ReservationResponse", {})
