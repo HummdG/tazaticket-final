@@ -295,7 +295,7 @@ async def FlightSearchStateMachine(
     raw_response = None
     # if isinstance(result, dict) and result.get("ok") and result.get("raw"):
     #     raw_response = result.get("raw")
-    if isinstance(result, dict) and "CatalogProductOfferingsResponse" in result:
+    if isinstance(result, dict): # and "CatalogProductOfferingsResponse" in result:
         raw_response = result
     # else:
     #     raw_response = result
