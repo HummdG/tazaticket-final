@@ -35,20 +35,41 @@ async def UnifiedTravelportBooking_v2(
     if selected.get("status") != "success":
         return {"status": "error", "message": "Invalid offer or option selection."}
 
-    selected_option = selected.get("option", {})
-    flights = selected_option.get("flights", [])
-    brand = selected_option.get("brand", {})
-    product = selected_option.get("product", {})
+    # selected_option = selected.get("option", {})
+    # flights = selected_option.get("flights", [])
+    # brand = selected_option.get("brand", {})
+    # product = selected_option.get("product", {})
 
-    # --- 2. Build Payloads ---
+    # # --- 2. Build Payloads ---
+    # add_offer_payload = build_from_products_payload(
+    #     selected_offer={
+    #         "itinerary_summary": {"segments": flights},
+    #         "brandTier": brand.get("tier", 1)
+    #     },
+    #     passengers=len(traveler_details),
+    #     passenger_type="ADT"
+    # )
+
+    selected_option = selected.get("option", {})
+    offer_ref = selected_option.get("offer_ref")
+    product_refs = selected_option.get("product_ref_list", [])
+
+    if not offer_ref or not product_refs:
+        return {
+            "status": "error",
+            "message": "Selected option is missing offer_ref or product_refs."
+        }
+
     add_offer_payload = build_from_products_payload(
-        selected_offer={
-            "itinerary_summary": {"segments": flights},
-            "brandTier": brand.get("tier", 1)
-        },
+        offer_ref=offer_ref,
+        product_refs=product_refs,
         passengers=len(traveler_details),
         passenger_type="ADT"
     )
+
+
+
+
 
     traveler_payload = build_traveler_payload(travelers=traveler_details)
 
