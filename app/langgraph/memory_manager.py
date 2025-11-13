@@ -20,14 +20,14 @@ Redis-based distributed memory manager for high concurrency.
 from .memory_utils import (
     Message, Pair, ThreadState,
     CHAT_HISTORY_TABLE, AWS_REGION, SESSION_IDLE_SECONDS, CONTEXT_PAIRS, BATCH_PAIRS, MAX_RAM_PAIRS,
-    get_now_iso, get_next_seq_from_dynamodb, get_next_turn_from_dynamodb,
-    read_pairs_from_dynamodb, load_conversation_state_from_dynamodb
+    #  get_next_seq_from_dynamodb, get_next_turn_from_dynamodb, read_pairs_from_dynamodb,
+       get_now_iso, load_conversation_state_from_dynamodb
 )
 
 import time
 import uuid
 import json
-from typing import List, Dict, Any, Optional
+from typing import List, Dict
 import aioboto3
 import asyncio
 import atexit
@@ -762,7 +762,7 @@ class MemoryManager:
         """
         print("[MemoryManager] Shutdown initiated — flushing all threads and awaiting background tasks")
         start_time = time.time()
-        timeout_seconds = 30
+        # timeout_seconds = 30
 
         # Since we're using Redis, we'll flush all pending Redis data to DynamoDB before shutdown
         # This ensures no data is lost during Redis eviction/shutdown
@@ -809,7 +809,7 @@ class MemoryManager:
         await self._track_task(monitor_task)
         print("[MemoryManager] Started periodic Redis memory monitoring")
 
-        async def set_latest_search_id(self, thread_id: str, search_id: str):
+    async def set_latest_search_id(self, thread_id: str, search_id: str):
         redis_conn = await self.redis.get_connection()
         await redis_conn.setex(f"thread_latest_search:{thread_id}", 86400, search_id)
 
@@ -820,10 +820,6 @@ class MemoryManager:
             value = value.decode()
         return value
     
-    async def set_latest_search_id(self, thread_id: str, search_id: str):
-        redis_conn = await self.redis.get_connection()
-        await redis_conn.setex(f"thread_latest_search:{thread_id}", 86400, search_id)
-
 
 
 # Global instance

@@ -3,8 +3,8 @@ LangGraph configuration and setup for the flight search chatbot
 """
 
 import os
-import json, ast
-import asyncio
+# import ast
+# import asyncio
 from typing import Annotated
 from typing_extensions import TypedDict
 from dotenv import load_dotenv
@@ -30,7 +30,7 @@ from app.tools.UnifiedTravelportBooking import unified_travelport_booking
 
 from app.langgraph.memory_manager import memory_manager
 from app.langgraph.prompt import PROMPT as system_prompt 
-from app.services.TravelportDataAdapter import TravelportDataAdapter
+# from app.services.TravelportDataAdapter import TravelportDataAdapter
 
 # Global variable to store current thread_id for tools
 _current_thread_id = "default"
@@ -207,7 +207,7 @@ def route_tools(state: State):
         print(f"[LangGraph-Trace]    Tool Calls: {[call['name'] for call in ai_message.tool_calls]}")
         return "tools"
     
-    print(f"[LangGraph-Trace]    No tool calls found, routing to END")
+    print("[LangGraph-Trace]    No tool calls found, routing to END")
     return END
 
 
@@ -369,7 +369,7 @@ async def invoke_graph(graph, user_message: str, thread_id: str = "default", is_
             print(f"[LangGraph-Trace] 💾 MEMORY: Response stored in memory | Thread: {thread_id}")
         else:
             print("[GraphConfig] Warning: No assistant response extracted from state")
-            print(f"[LangGraph-Trace] ⚠️  RESPONSE: No assistant text extracted from state")
+            print("[LangGraph-Trace] ⚠️  RESPONSE: No assistant text extracted from state")
             
         print(f"[LangGraph-Trace] 📋 COMPLETION: Graph invocation completed successfully | Thread: {thread_id}")
         return state
