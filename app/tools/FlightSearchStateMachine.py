@@ -17,7 +17,7 @@ from ..statemachine.ConversationFlowSM import ConversationFlowSM
 from ..payloads.OneWayFlightSearch import OneWayFlightSearch
 from ..payloads.RoundTripFlightSearch import RoundTripFlightSearch
 from .TravelportSearch import TravelportSearch
-from ..services.search_result_manager import search_result_manager
+from ..services.search_result_manager_v2 import search_result_manager
 from .airline_codes import (
     DEFAULT_PREFERRED_CARRIERS, 
     get_airline_name, 

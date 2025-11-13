@@ -1,8 +1,5 @@
 # --- LangGraph core imports ---
-from app.langgraph.graph_config import create_graph, invoke_graph, extract_last_ai_text
-
-# --- Search Result Management ---
-from app.services.search_result_manager import search_result_manager
+from app.langgraph.graph_config_v2 import create_graph, invoke_graph, extract_last_ai_text
 
 # --- Services ---
 from app.services.translation_service import TranslationService
@@ -20,7 +17,6 @@ from dotenv import load_dotenv
 
 # --- Load environment variables ---
 load_dotenv()
-
 
 
 # -------------------------------------------------------

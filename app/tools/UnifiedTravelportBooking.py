@@ -1,7 +1,7 @@
 from typing import Union, List, Dict, Any
 from langchain.tools import tool
 from ..payloads.BuildFromProductsPayload import build_from_products_payload
-from ..services.search_result_manager import search_result_manager
+from ..services.search_result_manager_v2 import search_result_manager
 from .TravelportReservation import (
     TravelportInitiateReservationWorkbench,
     TravelportAddOfferToReservation,

@@ -4,3 +4,5 @@ env
 **/__pycache__/
 gcp_key.json
 junk
+full_workflow.ipynb
+full workflow.py

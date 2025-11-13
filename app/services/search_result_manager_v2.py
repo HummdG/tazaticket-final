@@ -1,7 +1,64 @@
 # app/services/search_result_manager_v2.py
 import json
 import uuid
+from typing import Optional, Dict, Any, List
+from dataclasses import dataclass, asdict
 from ..langgraph.redis_manager import redis_manager  # use shared connection manager
+
+@dataclass
+class FlightOption:
+    """Represents a single flight option from search results"""
+    id: str
+    departure: str
+    arrival: str
+    departure_time: str
+    arrival_time: str
+    duration: str
+    airline: str
+    flight_number: str
+    aircraft: str
+    price: float
+    currency: str
+    cabin_class: str
+    stops: int
+    baggage_info: Dict[str, Any]
+    penalties: Dict[str, Any]
+    raw_data: Dict[str, Any]
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class SearchResult:
+    """Represents a complete search result"""
+    search_id: str
+    wa_id: str
+    thread_id: str
+    origin: str
+    destination: str
+    search_date: str
+    trip_type: str
+    passengers: int
+    flight_options: List[FlightOption]
+    search_timestamp: str
+    expires_at: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "search_id": self.search_id,
+            "wa_id": self.wa_id,
+            "thread_id": self.thread_id,
+            "origin": self.origin,
+            "destination": self.destination,
+            "search_date": self.search_date,
+            "trip_type": self.trip_type,
+            "passengers": self.passengers,
+            "flight_options": [option.to_dict() for option in self.flight_options],
+            "search_timestamp": self.search_timestamp,
+            "expires_at": self.expires_at
+        }
+
 
 
 class SearchResultManagerV2:
@@ -55,6 +112,43 @@ class SearchResultManagerV2:
             "option_id": selected_option.get("option_id"),
             "option": selected_option
         }
+
+    async def get_search_result(self, search_id: str) -> Optional[SearchResult]:
+        """Retrieve search result by ID"""
+        try:
+            redis_conn = await self.get_connection()
+            result_key = f"search_result:{search_id}"
+
+            result_data = await redis_conn.get(result_key)
+            if not result_data:
+                return None
+
+            data = json.loads(result_data)
+
+            # Convert flight options back to objects
+            flight_options = [
+                FlightOption(**option_data)
+                for option_data in data.get("flight_options", [])
+            ]
+
+            return SearchResult(
+                search_id=data["search_id"],
+                wa_id=data["wa_id"],
+                thread_id=data["thread_id"],
+                origin=data["origin"],
+                destination=data["destination"],
+                search_date=data["search_date"],
+                trip_type=data["trip_type"],
+                passengers=data["passengers"],
+                flight_options=flight_options,
+                search_timestamp=data["search_timestamp"],
+                expires_at=data["expires_at"]
+            )
+
+        except Exception as e:
+            print(f"[SearchResultManager] Error retrieving search result {search_id}: {e}")
+            return None
+
 
 
 # Shared instance (consistent with your project pattern)

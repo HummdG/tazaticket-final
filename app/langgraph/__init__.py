@@ -2,7 +2,7 @@
 LangGraph package for flight search chatbot
 """
 
-from .graph_config import (
+from .graph_config_v2 import (
     create_graph,
     invoke_graph,
     extract_last_ai_text,
