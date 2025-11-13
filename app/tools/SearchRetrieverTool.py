@@ -1,7 +1,7 @@
 from langchain_core.tools import tool
 from app.langgraph.memory_manager import memory_manager
 
-@tool("SearchMemoryTool.get_latest_search_id")
+@tool("search_memory_get_latest_search_id")
 async def search_memory_get_latest_search_id(thread_id: str):
     """
     Returns the latest search_id for the given user/thread.

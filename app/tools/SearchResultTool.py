@@ -28,7 +28,7 @@ import json
 from app.services.search_result_manager_v2 import search_result_manager
 
 
-@tool("SearchResultTool.get_option")
+@tool("search_result_get_option")
 async def search_result_get_option(
     search_id: str,
     offer_number: int,
