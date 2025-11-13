@@ -5,6 +5,7 @@ from langchain_core.tools import tool
 from ..services.search_result_manager_v2 import search_result_manager
 from ..payloads.BuildFromProductsPayload import build_from_products_payload
 from ..payloads.BuildTravelerPayload import build_traveler_payload
+from app.tools.TravelportSearch import get_access_token
 
 
 @tool("UnifiedTravelportBooking_v2")
@@ -51,13 +52,19 @@ async def UnifiedTravelportBooking_v2(
 
     traveler_payload = build_traveler_payload(travelers=traveler_details)
 
+
+
     # --- 3. Setup Travelport API Config ---
+    
     BASE_URL = "https://api.pp.travelport.com/11/air/book"
+    token = await get_access_token()
+    
     HEADERS = {
         "Accept": "application/json",
         "Content-Type": "application/json",
         "XAUTH_TRAVELPORT_ACCESSGROUP": os.getenv("TRAVELPORT_ACCESS_GROUP"),
-        "Authorization": f"Bearer {os.getenv('TRAVELPORT_TOKEN')}",
+        # "Authorization": f"Bearer {os.getenv('TRAVELPORT_TOKEN')}",
+        "Authorization": f"Bearer {token}",
         "Content-Version": "11"
     }
 
@@ -74,7 +81,7 @@ async def UnifiedTravelportBooking_v2(
                     "message": f"Travelport returned {resp.status}",
                     "response": text
                 }
-            
+
             init_data = await resp.json()
             reservation_id = (
                 init_data.get("ReservationResponse", {})
