@@ -26,7 +26,7 @@ from app.tools.TravelportReservation import (
     # TravelportCommitReservation,
     # TravelportFullReservation  # Commented out as per instructions
 )
-from app.tools.UnifiedTravelportBooking import unified_travelport_booking
+from app.tools.UnifiedTravelportBooking_old import unified_travelport_booking
 
 from app.langgraph.memory_manager import memory_manager
 from app.langgraph.prompt import PROMPT as system_prompt 
