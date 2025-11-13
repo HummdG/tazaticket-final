@@ -810,11 +810,12 @@ class MemoryManager:
         print("[MemoryManager] Started periodic Redis memory monitoring")
 
     async def set_latest_search_id(self, thread_id: str, search_id: str):
-        redis_conn = await self.redis.get_connection()
+        redis_conn = await redis_manager.get_connection()
         await redis_conn.setex(f"thread_latest_search:{thread_id}", 86400, search_id)
 
     async def get_latest_search_id(self, thread_id: str) -> str | None:
-        redis_conn = await self.redis.get_connection()
+        # redis_conn = await self.redis.get_connection()
+        redis_conn = await redis_manager.get_connection()
         value = await redis_conn.get(f"thread_latest_search:{thread_id}")
         if value and isinstance(value, bytes):
             value = value.decode()
